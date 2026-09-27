@@ -872,6 +872,8 @@ input:focus-visible {
 .panel { background: var(--panel); color: var(--fg); border: 2px solid var(--border); border-radius: 10px; padding: var(--sp3); box-shadow: 0 4px 10px rgba(0,0,0,.12); }
 .panel h2 { margin: 0 0 var(--sp2); font-size: 1.05rem; font-weight: 800; }
 .tag { font-size: .75rem; background: var(--btn-alt); color: var(--btn-alt-fg); border-radius: 4px; padding: 0 var(--sp1); font-weight: 700; }
+.tag.ok { background: #00A650; color: #fff; }
+.tag.wait { background: #F57F1C; color: #fff; }
 .muted { color: var(--muted); font-size: .85rem; }
 
 /* Title deed card: always paper (parchment), like the real thing --
@@ -2736,7 +2738,7 @@ function buildShell() {
         🎵<input type="range" id="volSlider" min="0" max="100" step="1" oninput="setMusicVolume(this.value)">
       </label>
     </div>
-    <div class="corner-tr"><span id="pauseBtnHolder"></span></div>
+    <div class="corner-tr"><span id="saveGameBtnHolder"></span><span id="pauseBtnHolder"></span></div>
     <div class="layout">
       <div class="side-left">
         <div class="hud"><div class="hud-pills" id="hudPills"></div><div class="hud-floats" id="hudFloats"></div></div>
@@ -2943,6 +2945,7 @@ function updateDock() {
     <div class="dock-group action">${primary}</div>`;
   $('turnLabel').innerHTML = game.over ? 'Game over' : `Turn ${game.turn || 1}<br>${esc(p.name)}'s turn`;
   updatePauseBtn();
+  updateSaveGameBtn();
 }
 // A postponed trade closes its own popup (see updateModal) so it doesn't
 // keep nagging the two people involved -- this button, sitting with the
@@ -2962,6 +2965,46 @@ function tradeTimerBadge() {
   const secs = Math.max(0, Math.ceil((game.tradeTimerEnd - Date.now()) / 1000));
   return `<span class="trade-timer ${secs <= 15 ? 'low' : ''}">THINKING TIME: ${secs}s</span>`;
 }
+// Only the backend-authoritative host ever sees the Save Game control --
+// this mirrors exactly the host check saveGame() itself enforces
+// server-side, so this is purely a UX convenience, never the real gate.
+function backendIsHostOfCurrentGame() {
+  return !!(isBackendAuthoritativeGame() && accountUser && backendLobby &&
+    window.authoritativeGame && backendLobby.gameId === window.authoritativeGame.gameId &&
+    backendLobby.game && backendLobby.game.hostAccountId === accountUser.id);
+}
+let saveGameInFlight = false;
+function updateSaveGameBtn() {
+  const el = $('saveGameBtnHolder');
+  if (!el) return;
+  if (!game || game.over || !backendIsHostOfCurrentGame()) { el.innerHTML = ''; return; }
+  el.innerHTML = `<button class="btn alt" ${saveGameInFlight ? 'disabled' : ''} onclick="openSaveGameDialog()">${saveGameInFlight ? 'Saving...' : 'Save game'}</button>`;
+}
+function openSaveGameDialog() {
+  if (saveGameInFlight) return;
+  const name = window.prompt('Save name', `Save ${new Date().toLocaleString()}`);
+  if (name === null) return;
+  backendSaveGame(window.authoritativeGame.gameId, name);
+}
+async function backendSaveGame(gameId, name) {
+  if (!gameId || saveGameInFlight) return;
+  saveGameInFlight = true;
+  updateSaveGameBtn();
+  try {
+    await backendGameRequest('/api/game/saves', {
+      method: 'POST',
+      body: JSON.stringify({ gameId, name }),
+    });
+    setAccountStatus(`Saved "${name}".`);
+    await refreshBackendSaves();
+  } catch (error) {
+    setAccountStatus(`Save failed: ${error.message}`);
+  } finally {
+    saveGameInFlight = false;
+    updateSaveGameBtn();
+  }
+}
+
 // Only the host (seat 0) ever sees a working pause control; guests and
 // local pass-and-play with nobody else connected don't get one at all.
 function updatePauseBtn() {
@@ -3272,6 +3315,43 @@ function introHTML() {
       <div class="rank ${r.fresh ? 'pop' : ''}">${r.shown ? ordinal(r.rank) : '...'}</div></div>`).join('')}</div>
     <button class="btn alt" onclick="skipIntro()">Skip</button></div>`;
 }
+let backendFinalResults = null;
+let backendFinalResultsGameId = null;
+let backendFinalResultsInFlight = null;
+// The authoritative placements/money/net worth always come from GET
+// /api/game/results -- the client never computes or guesses them. Falls
+// back to the plain winner-only text (below, in updateModal) if the
+// fetch hasn't resolved yet or this isn't a backend-authoritative game.
+async function fetchBackendFinalResults(gameId) {
+  if (!gameId || backendFinalResultsGameId === gameId || backendFinalResultsInFlight === gameId) return;
+  backendFinalResultsInFlight = gameId;
+  try {
+    const result = await backendGameRequest(`/api/game/results?gameId=${encodeURIComponent(gameId)}`);
+    backendFinalResults = result;
+    backendFinalResultsGameId = gameId;
+    render();
+  } catch (error) {
+    console.warn('Could not load final results:', error);
+  } finally {
+    if (backendFinalResultsInFlight === gameId) backendFinalResultsInFlight = null;
+  }
+}
+function finalResultsHTML() {
+  const ordinalLabel = n => n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+  if (isBackendAuthoritativeGame() && window.authoritativeGame.gameId && backendFinalResultsGameId === window.authoritativeGame.gameId && backendFinalResults) {
+    const rows = backendFinalResults.results.map(entry => `
+      <div class="social-row" style="margin-bottom:8px">
+        <span class="tag">${ordinalLabel(entry.placement)}</span>
+        ${socialAvatar({ username: entry.username || 'Player', avatar_url: entry.avatarUrl })}
+        <span class="social-name">${esc(entry.username || 'Player')}</span>
+        <span class="muted" style="margin-left:auto">${fmt(entry.money)} cash</span>
+        <span class="muted">${fmt(entry.netWorth)} net worth</span>
+      </div>`).join('');
+    return `<h2>Final results</h2>${rows}<div class="row"><button class="btn" onclick="restart()">Play again</button></div>`;
+  }
+  const winner = game.players[game.winnerId];
+  return `<h2>${esc(winner ? winner.name : 'A player')} wins the game</h2><p>Everyone else went bankrupt.</p><div class="row"><button class="btn" onclick="restart()">Play again</button></div>`;
+}
 function updateModal() {
   let key = '', html = '', cls = '', extra = '';
   if (popup) {
@@ -3285,7 +3365,7 @@ function updateModal() {
   } else if (ui.intro) {
     key = 'intro'; html = introHTML(); cls = 'plain wide';
   } else if (game.over) {
-    key = 'over'; html = `<h2>${esc(game.players[game.winnerId].name)} wins the game</h2><p>Everyone else went bankrupt.</p><div class="row"><button class="btn" onclick="restart()">Play again</button></div>`;
+    key = 'over'; html = finalResultsHTML();
   } else if (ui.viewingTrade && game.viewTrade) {
     key = 'viewtrade'; html = viewTradeHTML();
   } else if (ui.manage) {
@@ -3967,22 +4047,38 @@ function renderHostSetup() {
   }
   const h = hostState();
   if (!h.peer && !h.status) hostOpenLobby(h.lobbyId || hostSuggestLobbyId());
+  const isResumeLobby = !!(backendLobby && backendLobby.game && backendLobby.game.resumeSaveId);
   const serverLobbyPanel = backendLobby && backendLobby.gameId ? `
     <div class="panel acc-blue">
-      <h2>Server lobby</h2>
+      <h2>Server lobby${isResumeLobby ? ' (resuming a save)' : ''}</h2>
       <p class="muted">${esc(backendLobby.gameId)}</p>
       <div class="row">
         <button class="btn" onclick="backendRefreshLobby('${esc(backendLobby.gameId)}')">Refresh</button>
         <button class="btn alt" onclick="backendLeaveGame('${esc(backendLobby.gameId)}')">Leave lobby</button>
       </div>
-      ${backendLobbyPlayersHTML(backendLobby.players, 'Server roster')}
-      ${backendLobby.canStart ? `<button class="btn" onclick="backendStartGame('${esc(backendLobby.gameId)}')">Start server lobby</button>` : ''}
+      ${backendLobbyPlayersHTML(backendLobby.players, isResumeLobby ? 'Original players' : 'Server roster', { isResume: isResumeLobby })}
+      ${backendLobby.canStart
+        ? (isResumeLobby
+          ? `<button class="btn" onclick="backendResumeGame('${esc(backendLobby.gameId)}')">Resume game</button>`
+          : `<button class="btn" onclick="backendStartGame('${esc(backendLobby.gameId)}')">Start server lobby</button>`)
+        : (isResumeLobby ? '<p class="muted">Waiting for every original player to return.</p>' : '')}
     </div>` : `
     <div class="panel acc-blue">
       <h2>Server lobby</h2>
       <p class="muted">The server keeps the authoritative lobby membership for signed-in players.</p>
       <button class="btn" onclick="backendCreateGame()">Create server lobby</button>
     </div>`;
+  const savedGamesPanel = accountUser ? `
+    <div class="panel acc-green">
+      <h2>Saved games</h2>
+      ${backendSaves.length ? backendSaves.map(save => `
+        <div class="social-row" style="margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <span class="social-name">${esc(save.name)}</span>
+          <span class="tag">${esc(new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleString())}</span>
+          <span class="tag">${(save.players || []).length} players</span>
+          <button class="btn alt" onclick="backendResumeFromSave('${esc(save.saveId)}')">Resume</button>
+        </div>`).join('') : '<p class="muted">No saved games yet.</p>'}
+    </div>` : '';
   const serverGamesPanel = accountUser ? `
     <div class="panel acc-yellow">
       <h2>My server games</h2>
@@ -4008,6 +4104,7 @@ function renderHostSetup() {
         ${h.status ? `<p class="muted">${esc(h.status)}</p>` : ''}
       </div>
       ${serverLobbyPanel}
+      ${savedGamesPanel}
       ${serverGamesPanel}
       <div class="panel acc-yellow"><h2>Board</h2><p class="muted">${esc(selectedHostBoard ? selectedHostBoard.name : 'Classic board')}</p>
         <button class="btn alt" type="button" onclick="openBoardsScreen(true)">Choose board</button></div>
@@ -4123,7 +4220,7 @@ let pendingAccountSettings = {};
 
 if (window.authoritativeGame) {
   window.authoritativeGame.subscribe(async snapshot => {
-    if (!snapshot || !snapshot.gameId || !snapshot.state || snapshot.status !== 'ACTIVE') {
+    if (!snapshot || !snapshot.gameId || !snapshot.state || (snapshot.status !== 'ACTIVE' && snapshot.status !== 'FINISHED')) {
       if (!snapshot || !snapshot.gameId) authoritativeAppliedGameId = null;
       return;
     }
@@ -4137,6 +4234,8 @@ if (window.authoritativeGame) {
     }
     if (isNewGame) attachGame();
     else render();
+
+    if (game.over && snapshot.gameId) fetchBackendFinalResults(snapshot.gameId);
 
     const roll = snapshot.events.find(event => event.type === 'DICE_ROLLED');
     const eventKey = `${snapshot.gameId}:${snapshot.version}`;
@@ -4245,6 +4344,66 @@ async function accountRequest(path, options = {}) {
 
 let backendLobby = null;
 let backendMyGames = [];
+let backendSaves = [];
+
+async function refreshBackendSaves() {
+  if (!accountUser) { backendSaves = []; return; }
+  try {
+    const result = await backendGameRequest('/api/game/saves');
+    backendSaves = Array.isArray(result.saves) ? result.saves : [];
+  } catch (error) {
+    backendSaves = [];
+    console.warn('Could not refresh saved games:', error);
+  }
+}
+
+// Loading a save only creates the WAITING resume lobby server-side and
+// returns bare account IDs (no usernames/avatars/returned status) --
+// backendRefreshLobby immediately pulls the real lobby view (which does
+// have all of that, including per-seat returned_at) and renders it, the
+// same way joining an ordinary lobby does.
+async function backendResumeFromSave(saveId) {
+  if (!saveId) return;
+  try {
+    const result = await backendGameRequest('/api/game/load', {
+      method: 'POST',
+      body: JSON.stringify({ saveId }),
+    });
+    startBackendLobbyPolling(result.gameId);
+    await backendRefreshLobby(result.gameId);
+    await refreshBackendMyGames();
+  } catch (error) {
+    setAccountStatus(error.message);
+  }
+}
+
+// Distinct from backendStartGame(): a resume lobby's authoritative state
+// comes only from POST /api/game/resume, which restores the exact saved
+// snapshot server-side. The backend independently refuses to let a resume
+// lobby go through the ordinary start endpoint (USE_RESUME_ENDPOINT), so
+// this is the only path that can ever bring one back to ACTIVE.
+async function backendResumeGame(gameId) {
+  if (!gameId) return;
+  try {
+    const result = await backendGameRequest('/api/game/resume', {
+      method: 'POST',
+      body: JSON.stringify({ gameId }),
+    });
+    if (window.authoritativeGame) {
+      await activateBackendGame({
+        gameId: result.gameId,
+        version: result.version || 1,
+        status: result.status || 'ACTIVE',
+        state: result.state || null,
+        events: [],
+      });
+    }
+    await refreshBackendMyGames();
+  } catch (error) {
+    setAccountStatus(error.message);
+  }
+}
+
 
 function stopBackendLobbyPolling() {
   if (backendLobbyPollId) clearInterval(backendLobbyPollId);
@@ -4284,6 +4443,7 @@ async function backendGameRequest(path, options = {}) {
 async function refreshBackendMyGames() {
   if (!accountUser) {
     backendMyGames = [];
+    backendSaves = [];
     return;
   }
   try {
@@ -4293,6 +4453,7 @@ async function refreshBackendMyGames() {
     backendMyGames = [];
     console.warn('Could not refresh backend games:', error);
   }
+  await refreshBackendSaves();
 }
 
 async function backendCreateGame() {
@@ -4420,13 +4581,18 @@ async function backendStartGame(gameId) {
   }
 }
 
-function backendLobbyPlayersHTML(players = [], title = 'Players') {
+function backendLobbyPlayersHTML(players = [], title = 'Players', options = {}) {
   if (!players.length) return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2><p class="muted">No one has joined this server lobby yet.</p></div>`;
+  const isResume = !!options.isResume;
   const rows = players.map(p => {
     const name = p.username || p.name || 'Player';
     const seat = Number(p.seatIndex ?? p.seat_index ?? 0) + 1;
     const avatar = p.avatarUrl || p.avatar_url;
-    return `<div class="social-row">${socialAvatar({ username: name, avatar_url: avatar })}<span class="social-name">${esc(name)}</span><span class="tag">Seat ${seat}</span></div>`;
+    const returned = p.returnedAt || p.returned_at;
+    const statusTag = isResume
+      ? `<span class="tag ${returned ? 'ok' : 'wait'}">${returned ? 'Returned' : 'Waiting'}</span>`
+      : `<span class="tag">Seat ${seat}</span>`;
+    return `<div class="social-row">${socialAvatar({ username: name, avatar_url: avatar })}<span class="social-name">${esc(name)}</span>${statusTag}</div>`;
   }).join('');
   return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2>${rows}</div>`;
 }

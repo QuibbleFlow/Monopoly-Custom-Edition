@@ -6,7 +6,7 @@
   },
   "scripts": {
     "db:check": "node scripts/check-db.js",
-    "test": "node --test game-engine.test.js"
+    "test": "node --test *.test.js"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",

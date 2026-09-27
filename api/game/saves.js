@@ -1,7 +1,8 @@
 const { randomUUID } = require('node:crypto');
 const engine = require('../../game-engine.js');
 const boardData = require('../../game-board.js');
-const { database } = require('../../lib/account');
+const { database, noStore, parseBody, requireAccount } = require('../../lib/account');
+const { persistFinalResultsIfNeeded } = require('../../lib/game-results.js');
 
 function err(code, message, status = 400) {
   return { ok: false, status, error: { code, message } };
@@ -152,14 +153,69 @@ async function resumeGame({ account, gameId, db = database() }) {
     const save = saves[0];
     if (!save) return err('SAVE_NOT_FOUND', 'Save not found.', 404);
     const board = parseJson(save.board, {});
+    const spaces = Array.isArray(board?.spaces) ? board.spaces : boardData.spaces;
     const checked = validateSnapshot(save.state, board);
     if (checked.error) return checked.error;
     await tx`INSERT INTO game_states (id, owner_id, state, board, version)
       VALUES (${normalizedGameId}, ${account.id}, ${JSON.stringify(checked.state)}::jsonb, ${JSON.stringify(board)}::jsonb, ${Number(save.version)})
       ON CONFLICT (id) DO UPDATE SET owner_id = EXCLUDED.owner_id, state = EXCLUDED.state, board = EXCLUDED.board, version = EXCLUDED.version, updated_at = now()`;
     await tx`UPDATE games SET status = ${checked.state.over ? 'FINISHED' : 'ACTIVE'}, started_at = COALESCE(started_at, now()), updated_at = now() WHERE id = ${normalizedGameId}`;
+    // Covers the edge case of resuming a save taken after the game had
+    // already ended: derives FINISHED/results from the restored state
+    // itself, and is a no-op (via ON CONFLICT DO NOTHING) if a result row
+    // already exists for this game id.
+    await persistFinalResultsIfNeeded(tx, normalizedGameId, checked.state, spaces);
     return { ok: true, gameId: normalizedGameId, status: checked.state.over ? 'FINISHED' : 'ACTIVE', version: Number(save.version), state: checked.state, board };
   });
 }
 
-module.exports = { saveGame, listSaves, loadGame, resumeGame, validateSnapshot, serializeSave };
+async function savesRoute(req, res) {
+  noStore(res);
+
+  const account = await requireAccount(req, res);
+  if (!account) return;
+
+  if (req.method === 'POST') {
+    const body = parseBody(req);
+    // Only ever the authenticated account, the gameId and name it typed,
+    // and the existing saveId to overwrite (if any) are taken from the
+    // client. Everything that matters -- host check, membership check,
+    // and the actual state snapshot -- is re-derived server-side inside
+    // saveGame() from the authoritative game_states row, never from
+    // anything the client could supply about its own state.
+    const result = await saveGame({
+      account,
+      gameId: body.gameId || body.game_id || null,
+      name: body.name,
+      saveId: body.saveId || body.save_id || null,
+      db: database(),
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.status(200).json({ ok: true, save: result.save });
+  }
+
+  if (req.method === 'GET') {
+    // listSaves() itself filters by owner_id = account.id, so this can
+    // never return another account's saves regardless of what the
+    // request contains.
+    const result = await listSaves({ account, db: database() });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.status(200).json({ ok: true, saves: result.saves });
+  }
+
+  res.setHeader('Allow', 'GET, POST');
+  return res.status(405).json({ error: 'Method not allowed.' });
+}
+
+module.exports = savesRoute;
+module.exports.saveGame = saveGame;
+module.exports.listSaves = listSaves;
+module.exports.loadGame = loadGame;
+module.exports.resumeGame = resumeGame;
+module.exports.validateSnapshot = validateSnapshot;
+module.exports.serializeSave = serializeSave;
+module.exports.handleSavesRoute = savesRoute;

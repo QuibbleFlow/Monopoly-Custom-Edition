@@ -131,6 +131,51 @@
     return 0;
   }
 
+  // Authoritative net worth for a single player: cash on hand plus the
+  // value of every asset they own. Unmortgaged properties count at full
+  // board price; mortgaged properties count at their mortgage value
+  // (what the bank paid out for them) since that's the value actually
+  // backing the player's position; houses/hotels count at their full
+  // build cost. This is intentionally distinct from liquidationValue(),
+  // which is a private, in-turn "how much can this player raise right
+  // now" helper used only during forced asset sales.
+  function calculateNetWorth(state, spaces, playerId) {
+    const p = state.players[playerId];
+    if (!p) return 0;
+    let worth = p.money;
+    for (let index = 0; index < spaces.length; index++) {
+      if (state.owners[index] !== playerId) continue;
+      const space = spaces[index];
+      worth += (state.houses[index] || 0) * (space.houseCost || 0);
+      worth += state.mortgaged[index] ? mortgageValue(spaces, index) : (space.price || 0);
+    }
+    return worth;
+  }
+
+  // Authoritative final placements for an ended game (state.over === true).
+  // 1st place is the surviving winner (state.winnerId); the rest are
+  // ranked by reverse bankruptcy order (the most recently eliminated
+  // player placed higher than one eliminated earlier). Money and net
+  // worth are read straight from authoritative state -- bankrupt players
+  // have already had their assets transferred away and money zeroed by
+  // declareBankruptcy, so they correctly show 0/0.
+  function computeFinalResults(state, spaces) {
+    if (!state.over) return null;
+    const eliminated = Array.isArray(state.eliminatedOrder) ? state.eliminatedOrder.slice().reverse() : [];
+    const ranked = state.winnerId == null ? eliminated : [state.winnerId, ...eliminated.filter(id => id !== state.winnerId)];
+    return ranked.map((playerId, index) => {
+      const p = state.players[playerId];
+      return {
+        playerId,
+        accountId: p ? p.accountId : null,
+        name: p ? p.name : null,
+        placement: index + 1,
+        money: p ? p.money : 0,
+        netWorth: calculateNetWorth(state, spaces, playerId),
+      };
+    });
+  }
+
   function canManage(state) {
     return !state.over && (
       ['buy', 'after', 'debt'].includes(state.phase) ||
@@ -844,5 +889,7 @@
     validateTrade,
     legalActions,
     applyAction,
+    calculateNetWorth,
+    computeFinalResults,
   };
 });

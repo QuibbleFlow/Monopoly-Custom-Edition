@@ -402,6 +402,48 @@ test('trades cannot include unowned properties or properties in a developed set'
   assert.equal(engine.validateTrade(state, trade, spaces).code, 'PROPERTY_NOT_TRADABLE');
 });
 
+test('net worth counts cash plus unmortgaged property price, mortgage value, and full house cost', () => {
+  const state = newState();
+  assert.equal(engine.calculateNetWorth(state, spaces, 0), state.players[0].money);
+
+  state.owners[1] = 0;
+  state.houses[1] = 2;
+  assert.equal(engine.calculateNetWorth(state, spaces, 0), state.players[0].money + 60 + 2 * 50);
+
+  state.owners[3] = 0;
+  state.mortgaged[3] = true;
+  assert.equal(engine.calculateNetWorth(state, spaces, 0), state.players[0].money + 60 + 2 * 50 + 30);
+
+  assert.equal(engine.calculateNetWorth(state, spaces, 99), 0);
+});
+
+test('final results rank the winner first and the rest by reverse bankruptcy order, with authoritative money and net worth', () => {
+  const state = newState();
+  state.over = true;
+  state.winnerId = 0;
+  // Player 2 went bankrupt before player 1 did, so player 1 (eliminated
+  // more recently) should place above player 2.
+  state.eliminatedOrder = [2, 1];
+  state.players[0].money = 1500;
+  state.owners[1] = 0;
+  state.players[1].money = 0;
+  state.players[2].money = 0;
+
+  const results = engine.computeFinalResults(state, spaces);
+  assert.deepEqual(results.map(entry => entry.placement), [1, 2, 3]);
+  assert.deepEqual(results.map(entry => entry.playerId), [0, 1, 2]);
+  assert.deepEqual(results.map(entry => entry.accountId), ['account-a', null, 'account-c']);
+  assert.equal(results[0].money, 1500);
+  assert.equal(results[0].netWorth, 1500 + 60);
+  assert.equal(results[1].money, 0);
+  assert.equal(results[1].netWorth, 0);
+  assert.equal(results[2].money, 0);
+  assert.equal(results[2].netWorth, 0);
+
+  const notOver = newState();
+  assert.equal(engine.computeFinalResults(notOver, spaces), null);
+});
+
 const { handleGameAction, executeGameAction } = require('./api/game/action.js');
 
 function makeRes() {

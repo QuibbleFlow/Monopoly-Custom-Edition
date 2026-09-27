@@ -2,6 +2,7 @@ const engine = require('../../game-engine.js');
 const boardData = require('../../game-board.js');
 const cardData = require('../../game-cards.js');
 const { database, noStore, parseBody, requireAccount } = require('../../lib/account');
+const { persistFinalResultsIfNeeded } = require('../../lib/game-results.js');
 
 function statusForError(code) {
   switch (code) {
@@ -270,6 +271,7 @@ async function executeGameAction({
         ok: true,
         gameId,
         version: nextVersion,
+        status: resolved.state.over ? 'FINISHED' : 'ACTIVE',
         state: resolved.state,
         events: resolved.events,
       };
@@ -279,6 +281,11 @@ async function executeGameAction({
             version = ${nextVersion},
             updated_at = now()
         WHERE id = ${gameId}`;
+
+      // Server-derived only: this reads resolved.state.over, which the
+      // engine alone can set (see declareBankruptcy in game-engine.js).
+      // Nothing here ever trusts a client-supplied status or result.
+      await persistFinalResultsIfNeeded(tx, gameId, resolved.state, spaces);
 
       if (requestId) {
         const inserted = await tx`INSERT INTO game_action_requests (game_id, request_id, result_json)
@@ -336,6 +343,7 @@ async function handleGameAction(req, res, deps = {}) {
       ok: true,
       gameId: result.gameId,
       version: result.version,
+      status: result.status || 'ACTIVE',
       state: redactTradeState(result.state, account.id),
       events: result.events,
     });

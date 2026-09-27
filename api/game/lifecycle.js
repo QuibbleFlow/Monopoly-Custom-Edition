@@ -20,6 +20,7 @@ function serializePlayerRow(row) {
     username: row.username,
     avatarUrl: row.avatar_url || row.avatarUrl || null,
     joinedAt: row.joined_at || row.joinedAt || null,
+    returnedAt: row.returned_at || row.returnedAt || null,
   };
 }
 
@@ -29,11 +30,13 @@ function serializeGameRow(row) {
     hostAccountId: row.host_account_id || row.hostAccountId,
     status: row.status,
     selectedBoardId: row.selected_board_id || row.selectedBoardId || null,
+    resumeSaveId: row.resume_save_id || row.resumeSaveId || null,
     createdAt: row.created_at || row.createdAt || null,
     startedAt: row.started_at || row.startedAt || null,
     updatedAt: row.updated_at || row.updatedAt || null,
   };
 }
+
 
 async function ensureBoardOwner(tx, accountId, selectedBoardId) {
   if (!selectedBoardId) return null;
@@ -63,7 +66,7 @@ async function createGame({ account, selectedBoardId, db = database() }) {
       VALUES (${gameId}, ${account.id}, ${0}, now())`;
 
     const games = await tx`SELECT * FROM games WHERE id = ${gameId}`;
-    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, a.username, a.avatar_url
+    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
       FROM game_players gp
       JOIN accounts a ON a.id = gp.account_id
       WHERE gp.game_id = ${gameId}
@@ -99,6 +102,38 @@ async function joinGame({ account, gameId, db = database() }) {
     }
 
     const already = await tx`SELECT * FROM game_players WHERE game_id = ${normalizedGameId} AND account_id = ${account.id}`;
+
+    if (game.resume_save_id) {
+      // Resume lobbies are pre-seeded (by loadGame) with one row per
+      // original account/seat. Nobody new can join one: an account with
+      // no seat here was never part of the saved game, so it is rejected
+      // as a substitute rather than allowed to take an open slot. An
+      // account that does have a seat is "returning", not joining, so we
+      // only ever stamp returned_at on its existing row -- we never
+      // insert a row or move it to a different seat, which is what keeps
+      // another account from ever being able to occupy that seat.
+      if (!already[0]) {
+        return err('NOT_ORIGINAL_PLAYER', 'Only the original players from this save can return to it.', 403);
+      }
+      if (!already[0].returned_at) {
+        await tx`UPDATE game_players SET returned_at = now() WHERE game_id = ${normalizedGameId} AND account_id = ${account.id}`;
+      }
+
+      const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
+        FROM game_players gp
+        JOIN accounts a ON a.id = gp.account_id
+        WHERE gp.game_id = ${normalizedGameId}
+        ORDER BY gp.seat_index ASC`;
+
+      return {
+        ok: true,
+        gameId: normalizedGameId,
+        game: serializeGameRow(game),
+        players: players.map(serializePlayerRow),
+        status: game.status,
+      };
+    }
+
     if (already[0]) {
       return err('ALREADY_IN_GAME', 'You are already a player in this game.', 409);
     }
@@ -113,7 +148,7 @@ async function joinGame({ account, gameId, db = database() }) {
     await tx`INSERT INTO game_players (game_id, account_id, seat_index, joined_at)
       VALUES (${normalizedGameId}, ${account.id}, ${nextSeat}, now())`;
 
-    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, a.username, a.avatar_url
+    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
       FROM game_players gp
       JOIN accounts a ON a.id = gp.account_id
       WHERE gp.game_id = ${normalizedGameId}
@@ -172,7 +207,7 @@ async function leaveGame({ account, gameId, db = database() }) {
     }
 
     const refreshed = await tx`SELECT * FROM games WHERE id = ${normalizedGameId}`;
-    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, a.username, a.avatar_url
+    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
       FROM game_players gp
       JOIN accounts a ON a.id = gp.account_id
       WHERE gp.game_id = ${normalizedGameId}
@@ -209,6 +244,14 @@ async function startGame({ account, gameId, db = database() }) {
     }
     if (game.status !== 'WAITING') {
       return err('GAME_ALREADY_STARTED', 'This game has already started.', 409);
+    }
+    if (game.resume_save_id) {
+      // A resume lobby's authoritative state comes only from resumeGame(),
+      // which restores the exact saved snapshot. Routing it through the
+      // normal startGame() would silently rebuild fresh players from
+      // current lobby profiles and discard the saved money/properties/
+      // turn state entirely, so it is refused here rather than allowed.
+      return err('USE_RESUME_ENDPOINT', 'This lobby resumes a saved game; use the resume endpoint to start it.', 409);
     }
 
     const players = await tx`SELECT gp.account_id, gp.seat_index, a.username
@@ -272,18 +315,30 @@ async function getLobby({ account, gameId, db = database() }) {
       return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
     }
 
-    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, a.username, a.avatar_url
+    const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
       FROM game_players gp
       JOIN accounts a ON a.id = gp.account_id
       WHERE gp.game_id = ${normalizedGameId}
       ORDER BY gp.seat_index ASC`;
+
+    // canStart reflects, for the UI's convenience only, exactly the rule
+    // the backend itself enforces: startGame() for a fresh lobby requires
+    // 2+ seated players; resumeGame() for a resume lobby requires every
+    // original seat's returned_at to be set. Neither the client nor this
+    // flag is ever trusted to gate the actual transition -- startGame and
+    // resumeGame re-check these conditions themselves.
+    const canStart = game.status === 'WAITING' && game.host_account_id === account.id && (
+      game.resume_save_id
+        ? players.length >= 2 && players.every(player => player.returned_at)
+        : players.length >= 2
+    );
 
     return {
       ok: true,
       gameId: normalizedGameId,
       game: serializeGameRow(game),
       players: players.map(serializePlayerRow),
-      canStart: game.status === 'WAITING' && game.host_account_id === account.id && players.length >= 2,
+      canStart,
     };
   });
 
