@@ -1,0 +1,354 @@
+const engine = require('../../game-engine.js');
+const boardData = require('../../game-board.js');
+const cardData = require('../../game-cards.js');
+const { database, noStore, parseBody, requireAccount } = require('../../lib/account');
+
+function statusForError(code) {
+  switch (code) {
+    case 'UNAUTHENTICATED':
+    case 'PLAYER_NOT_IN_GAME':
+    case 'PLAYER_MISMATCH':
+    case 'NOT_YOUR_TURN':
+    case 'GAME_OVER':
+    case 'NOT_TRADE_PARTICIPANT':
+    case 'HOST_REQUIRED':
+      return 403;
+    case 'STALE_VERSION':
+      return 409;
+    case 'INVALID_ACTION':
+    case 'CLIENT_DICE_REJECTED':
+    case 'CLIENT_CARD_REJECTED':
+    case 'INVALID_REQUEST':
+    case 'ILLEGAL_ACTION':
+      return 400;
+    case 'GAME_NOT_FOUND':
+      return 404;
+    default:
+      return 400;
+  }
+}
+
+function normalizeAction(action) {
+  if (!action || typeof action !== 'object' || typeof action.type !== 'string') {
+    return { ok: false, error: { code: 'INVALID_ACTION', message: 'A valid action is required.' } };
+  }
+  return { ok: true, action };
+}
+
+function parseStoredResult(value) {
+  return typeof value === 'string' ? JSON.parse(value) : value;
+}
+
+const COMPLETED_TRADE_VIEW_MS = 10 * 1000;
+
+function redactTradeState(state, accountId) {
+  const copy = engine.cloneState(state);
+  if (copy.trade && copy.trade.from !== undefined && copy.trade.to !== undefined &&
+      copy.players[copy.trade.from]?.accountId !== accountId && copy.players[copy.trade.to]?.accountId !== accountId) {
+    copy.trade = null;
+  }
+  return copy;
+}
+
+function applyEngineAction(state, action, spaces) {
+  return engine.applyAction(state, action, { spaces });
+}
+
+function resolveRollSequence(initialState, initialEvents, playerId, spaces, random) {
+  let state = initialState;
+  const events = initialEvents.slice();
+  const apply = action => {
+    const result = applyEngineAction(state, action, spaces);
+    if (result.error) return result;
+    state = result.state;
+    events.push(...result.events);
+    return null;
+  };
+
+  let movementSteps = 0;
+  let cardDraws = 0;
+  let resolutions = 0;
+  while (resolutions < 24 && !state.debt && !state.auction && state.phase !== 'buy' && !state.over) {
+    resolutions += 1;
+    while (state.pendingMove) {
+      if (movementSteps >= spaces.length * 4) {
+        return { error: 'The pending movement exceeded the board limit.' };
+      }
+      const movement = state.pendingMove;
+      const error = apply({ type: 'MOVE_STEP', playerId: movement.playerId, direction: movement.direction });
+      if (error) return error;
+      movementSteps += 1;
+    }
+
+    if (!state.landingPending) break;
+    const landingEventStart = events.length;
+    const landingError = apply({ type: 'LAND_ON_SPACE', playerId, position: state.players[playerId].pos });
+    if (landingError) return landingError;
+    const landingEvents = events.slice(landingEventStart);
+    if (landingEvents.some(event => event.type === 'LANDING_GO_TO_JAIL')) {
+      const jailError = apply({ type: 'SEND_TO_JAIL', playerId });
+      if (jailError) return jailError;
+    }
+
+    const cardRequest = landingEvents.find(event => event.type === 'CARD_DRAW_REQUESTED');
+    if (!cardRequest) break;
+    if (cardDraws >= 12) return { error: 'The card movement chain exceeded the resolution limit.' };
+    cardDraws += 1;
+    const deck = cardRequest.deck === 'chance' ? cardData.chance : cardData.chest;
+    const randomIndex = Math.min(deck.length - 1, Math.max(0, Math.floor(random() * deck.length)));
+    const card = deck[randomIndex];
+    const cardEventStart = events.length;
+    const cardError = apply({ type: 'APPLY_CARD', playerId, card });
+    if (cardError) return cardError;
+    const drawnEvent = events.slice(cardEventStart).find(event => event.type === 'CARD_DRAWN');
+    if (drawnEvent) {
+      drawnEvent.deck = cardRequest.deck;
+      drawnEvent.text = card.text;
+    }
+  }
+
+  if (resolutions >= 24 && (state.pendingMove || state.landingPending)) {
+    return { error: 'The turn exceeded the resolution limit.' };
+  }
+
+  const deferredResolution = state.debt || state.auction || state.phase === 'buy' || state.over;
+  if (!deferredResolution && state.phase === 'roll') {
+    const completionError = apply({ type: 'COMPLETE_ACTION', playerId });
+    if (completionError) return completionError;
+  }
+
+  if (!state.debt && !state.auction && !state.over && state.phase === 'after') {
+    const turnError = apply({ type: 'END_TURN', playerId });
+    if (turnError) return turnError;
+  }
+
+  return { state, events };
+}
+
+async function executeGameAction({
+  account,
+  gameId,
+  action,
+  version,
+  requestId,
+  sql,
+  random = Math.random,
+}) {
+  if (!account || !account.id) {
+    return { ok: false, error: { code: 'UNAUTHENTICATED', message: 'Sign in to continue.' } };
+  }
+
+  const normalized = normalizeAction(action);
+  if (!normalized.ok) return normalized;
+
+  if (typeof gameId !== 'string' || !gameId.trim()) {
+    return { ok: false, error: { code: 'INVALID_REQUEST', message: 'A gameId is required.' } };
+  }
+
+  if (!Number.isInteger(version) || version < 1) {
+    return { ok: false, error: { code: 'STALE_VERSION', message: 'The submitted game version is invalid.' } };
+  }
+
+  const db = sql || database();
+
+  try {
+    return await db.begin(async tx => {
+      const rows = await tx`SELECT id, version, state, board FROM game_states WHERE id = ${gameId} FOR UPDATE`;
+      const row = rows[0];
+      if (!row) {
+        return { ok: false, error: { code: 'GAME_NOT_FOUND', message: 'Game not found.' } };
+      }
+
+      const currentVersion = Number(row.version) || 1;
+      const state = engine.deserializeState(row.state);
+      if (action.type === 'SET_PAUSE' || action.type === 'GAME_TICK') {
+        const gameRows = await tx`SELECT host_account_id FROM games WHERE id = ${gameId}`;
+        if (!gameRows[0] || gameRows[0].host_account_id !== account.id) {
+          return { ok: false, error: { code: 'HOST_REQUIRED', message: 'Only the host can control game timers.' } };
+        }
+      }
+      const boardState = row.board && typeof row.board === 'object' ? row.board : {};
+      const spaces = Array.isArray(boardState.spaces) ? boardState.spaces : boardData.spaces;
+      const actingPlayer = state.players.find(player => player.accountId === account.id);
+      if (!actingPlayer) {
+        return { ok: false, error: { code: 'PLAYER_NOT_IN_GAME', message: 'You are not a player in this game.' } };
+      }
+
+      if (requestId) {
+        const existingRows = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
+        if (existingRows && existingRows[0] && existingRows[0].result_json) {
+          return parseStoredResult(existingRows[0].result_json);
+        }
+      }
+
+      if (version !== currentVersion) {
+        return { ok: false, error: { code: 'STALE_VERSION', message: `Action version ${version} is stale. Current version is ${currentVersion}.` } };
+      }
+
+      if (action.playerId != null && Number(action.playerId) !== actingPlayer.id) {
+        return { ok: false, error: { code: 'PLAYER_MISMATCH', message: 'You can only act as your own player.' } };
+      }
+
+      if (action.type === 'APPLY_CARD') {
+        return { ok: false, error: { code: 'CLIENT_CARD_REJECTED', message: 'Cards are selected and applied by the server.' } };
+      }
+
+      if (state.over) {
+        return { ok: false, error: { code: 'GAME_OVER', message: 'This game has already ended.' } };
+      }
+
+      const current = engine.currentPlayer(state);
+      if (action.type === 'PROPOSE_TRADE') {
+        if (state.trade) {
+          return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'A trade is already active.' } };
+        }
+        const trade = action.trade;
+        if (!trade || !Number.isInteger(Number(trade.to)) || Number(trade.to) === actingPlayer.id) {
+          return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'A valid trade recipient is required.' } };
+        }
+        const recipient = state.players[Number(trade.to)];
+        if (!recipient || recipient.bankrupt) {
+          return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'That player cannot receive a trade.' } };
+        }
+        state.trade = {
+          from: actingPlayer.id,
+          to: Number(trade.to),
+          give: Array.isArray(trade.give) ? trade.give.map(Number) : [],
+          get: Array.isArray(trade.get) ? trade.get.map(Number) : [],
+          giveCash: Number(trade.giveCash) || 0,
+          getCash: Number(trade.getCash) || 0,
+          stage: 'edit',
+          error: '',
+        };
+      }
+      const expectedActorId = state.trade && ['PROPOSE_TRADE', 'CANCEL_TRADE'].includes(action.type)
+        ? state.trade.from
+        : state.trade && ['ACCEPT_TRADE', 'DECLINE_TRADE', 'POSTPONE_TRADE'].includes(action.type)
+          ? state.trade.to
+          : state.auction
+        ? state.auction.turn
+        : state.debt
+          ? state.debt.pid
+          : current && current.id;
+      if (expectedActorId == null || expectedActorId !== actingPlayer.id) {
+        return { ok: false, error: { code: 'NOT_YOUR_TURN', message: 'It is not this player\'s turn.' } };
+      }
+
+      const requestAction = { ...action, playerId: action.playerId == null ? actingPlayer.id : Number(action.playerId) };
+      if (requestAction.type === 'ACCEPT_TRADE') {
+        requestAction.now = Date.now();
+        requestAction.viewTradeMs = COMPLETED_TRADE_VIEW_MS;
+      }
+      if (requestAction.type === 'ROLL_DICE') {
+        if (Object.prototype.hasOwnProperty.call(action, 'dice')) {
+          return { ok: false, error: { code: 'CLIENT_DICE_REJECTED', message: 'Dice must be generated server-side.' } };
+        }
+        const first = 1 + Math.floor(random() * 6);
+        const second = 1 + Math.floor(random() * 6);
+        requestAction.dice = [first, second];
+      }
+
+      const legal = engine.legalActions(state, spaces).some(candidate => candidate.type === requestAction.type && candidate.playerId === requestAction.playerId);
+      if (!legal) {
+        return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'That action is not legal in the current game state.' } };
+      }
+
+      const result = applyEngineAction(state, requestAction, spaces);
+      if (result.error) {
+        return { ok: false, error: { code: 'ILLEGAL_ACTION', message: result.error } };
+      }
+
+      const resolved = requestAction.type === 'ROLL_DICE'
+        ? resolveRollSequence(result.state, result.events, actingPlayer.id, spaces, random)
+        : { state: result.state, events: result.events };
+      if (resolved.error) {
+        return { ok: false, error: { code: 'ILLEGAL_ACTION', message: resolved.error } };
+      }
+
+      const nextVersion = currentVersion + 1;
+      const payload = {
+        ok: true,
+        gameId,
+        version: nextVersion,
+        state: resolved.state,
+        events: resolved.events,
+      };
+
+      await tx`UPDATE game_states
+        SET state = ${JSON.stringify(resolved.state)}::jsonb,
+            version = ${nextVersion},
+            updated_at = now()
+        WHERE id = ${gameId}`;
+
+      if (requestId) {
+        const inserted = await tx`INSERT INTO game_action_requests (game_id, request_id, result_json)
+          VALUES (${gameId}, ${requestId}, ${JSON.stringify(payload)}::jsonb)
+          ON CONFLICT (game_id, request_id) DO NOTHING
+          RETURNING result_json`;
+        if (inserted && inserted[0]) {
+          return payload;
+        }
+        const replay = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
+        if (replay && replay[0] && replay[0].result_json) {
+          return parseStoredResult(replay[0].result_json);
+        }
+        return payload;
+      }
+
+      return payload;
+    });
+  } catch (error) {
+    console.error('Game action execution failed:', error);
+    return { ok: false, error: { code: 'INTERNAL_ERROR', message: 'The game action could not be processed.' } };
+  }
+}
+
+async function handleGameAction(req, res, deps = {}) {
+  noStore(res);
+
+  try {
+    const account = deps.currentAccount ? await deps.currentAccount(req, res) : await requireAccount(req, res);
+    if (!account) {
+      return res.status(401).json({ error: 'Sign in to continue.' });
+    }
+
+    const payload = parseBody(req);
+    const gameId = payload.gameId;
+    const action = payload.action;
+    const requestId = payload.requestId;
+    const version = payload.version;
+    const sql = deps.database ? deps.database() : database();
+    const result = await executeGameAction({
+      account,
+      gameId,
+      action,
+      version,
+      requestId,
+      sql,
+      random: deps.random || Math.random,
+    });
+
+    if (!result.ok) {
+      return res.status(statusForError(result.error.code)).json({ error: result.error });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      gameId: result.gameId,
+      version: result.version,
+      state: redactTradeState(result.state, account.id),
+      events: result.events,
+    });
+  } catch (error) {
+    console.error('Game action API failed:', error);
+    return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'The game action could not be processed.' } });
+  }
+}
+
+module.exports = async function gameAction(req, res) {
+  return handleGameAction(req, res, {});
+};
+
+module.exports.handleGameAction = handleGameAction;
+module.exports.executeGameAction = executeGameAction;
+module.exports.statusForError = statusForError;

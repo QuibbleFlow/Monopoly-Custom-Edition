@@ -26,9 +26,10 @@
   Pass and play on one screen, 2 to 4 players.
 =====================================================================
 
-  This is ONE file. The look (CSS), the page (HTML) and the game
-  logic (JavaScript) all live here. No install needed. Open it in a
-  browser and play.
+  The page, styling, and presentation live here. Deterministic game
+  state and rule transitions live in game-engine.js, loaded below this
+  file's metadata. No install needed. Keep the two files together and
+  open index.html in a browser to play.
 
   WHAT YOU SEE ON SCREEN
   ----------------------
@@ -51,9 +52,9 @@
        SECTION 1   Game settings (cash, fines, ANIMATION SPEED)
        SECTION 2   THE BOARD DATA  <-- edit this to make custom properties
        SECTION 3   Chance and Community Chest cards
-       SECTION 4   Game state (the "memory" of the game) and UI state
+      SECTION 4   Engine state adapter and UI state
        SECTION 5   Sound effects
-       SECTION 6   Rules helpers (rent, sets, building, mortgages)
+      SECTION 6   Engine rule adapters (rent, sets, building, mortgages)
        SECTION 7   Animation helpers (dice, 3D camera, moving pieces)
        SECTION 8   Turn flow (roll, move, land, buy, end turn)
        SECTION 9   Money problems (paying, debt, bankruptcy)
@@ -1069,6 +1070,28 @@ input:focus-visible {
 .setup details { margin-top: var(--sp1); }
 .setup summary { cursor: pointer; font-weight: 800; }
 .setup li { margin: var(--sp1) 0; }
+.account-panel .account-row { display: flex; align-items: center; gap: var(--sp3); flex-wrap: wrap; }
+.account-panel .account-avatar { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; background: var(--btn-alt); border: 2px solid var(--border); }
+.account-panel .account-fields { display: grid; gap: var(--sp2); }
+.account-panel input[type=password], .account-panel input[type=text] { width: 100%; margin: 0; }
+.account-panel .account-actions { display: flex; gap: var(--sp2); flex-wrap: wrap; margin-top: var(--sp2); }
+.account-panel .account-preferences { display: grid; grid-template-columns: 1fr auto; gap: var(--sp2) var(--sp3); align-items: center; margin-top: var(--sp3); }
+.account-panel .account-preferences input[type=range] { width: 120px; }
+.account-panel .account-preferences label { display: contents; }
+.account-status { min-height: 1.3em; margin: var(--sp2) 0 0; font-size: .9rem; font-weight: 700; }
+@media (max-width: 420px) { .account-panel .account-preferences input[type=range] { width: 95px; } }
+.social-list { display: grid; gap: var(--sp2); }
+.social-row { display: flex; align-items: center; gap: var(--sp2); flex-wrap: wrap; padding: var(--sp2); background: rgba(255,255,255,.55); border: 1px solid var(--border); border-radius: 6px; }
+.social-avatar { width: 42px; height: 42px; flex: none; object-fit: cover; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+.social-row .social-name { flex: 1 1 100px; font-weight: 800; overflow-wrap: anywhere; }
+.board-editor-preview { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); grid-template-rows: repeat(11, minmax(0, 1fr)); gap: 2px; width: min(100%, 520px); aspect-ratio: 1; margin: var(--sp3) auto; padding: 5px; background: var(--wood-dark); border: 3px solid #1b1714; border-radius: 8px; }
+.board-preview-space { min-width: 0; min-height: 0; overflow: hidden; display: grid; place-items: center; padding: 1px; background: #f8fbf7; color: #101a14; border: 1px solid #52645a; font: 700 clamp(5px, 1.4vw, 10px)/1.05 var(--font); text-align: center; overflow-wrap: anywhere; }
+.board-preview-space.property { border-top: 4px solid var(--space-color, #888); }
+button.board-preview-space { cursor: pointer; }
+button.board-preview-space.selected { outline: 3px solid var(--accent); outline-offset: -3px; }
+.board-preview-center { grid-row: 2 / 11; grid-column: 2 / 11; display: grid; place-items: center; padding: var(--sp3); background: var(--board); border: 1px solid var(--border); color: var(--fg); text-align: center; font-weight: 800; overflow-wrap: anywhere; }
+.board-editor-controls { display: grid; gap: var(--sp2); max-width: 520px; margin: 0 auto; }
+.social-actions { display: flex; gap: var(--sp2); flex-wrap: wrap; margin-left: auto; }
 
 </style>
 </head>
@@ -1081,6 +1104,11 @@ input:focus-visible {
 <!-- HTML: one container. JavaScript draws every screen into it. -->
 <div id="app"></div>
 
+<script src="game-board.js"></script>
+<script src="game-cards.js"></script>
+<script src="game-engine.js"></script>
+<script src="authoritative-game.js"></script>
+<script src="account-features.js"></script>
 <script>
 /* =====================================================================
    SECTION 1. GAME SETTINGS
@@ -1113,22 +1141,13 @@ const SAVE_KEY = 'monopoly-ontario-edition-save-v2';
 const ANIM_SCALE = 1.4;
 
 /* =====================================================================
-   SECTION 2. THE BOARD DATA  (edit here for custom properties)
+  SECTION 2. THE BOARD DATA  (shared by browser and backend)
 
    COLOR_GROUPS: the color sets. Own every property of one color and
    you can build houses and collect double rent on empty lots.
    To add a group, add a line like:   teal: { label: 'Teal', css: '#20b2aa' }
    ===================================================================== */
-const COLOR_GROUPS = {
-  brown:     { label: 'Brown',      css: '#955436' },
-  lightblue: { label: 'Light blue', css: '#B9E8F2' },
-  pink:      { label: 'Pink',       css: '#AE1572' },
-  orange:    { label: 'Orange',     css: '#F57F1C' },
-  red:       { label: 'Red',        css: '#ED2023' },
-  yellow:    { label: 'Yellow',     css: '#F3EE04' },
-  green:     { label: 'Green',      css: '#00A650' },
-  darkblue:  { label: 'Dark blue',  css: '#1477BA' },
-};
+const COLOR_GROUPS = window.MonopolyBoard.colorGroups;
 
 /* Builds a normal property square.
      name      text shown on the board
@@ -1138,87 +1157,7 @@ const COLOR_GROUPS = {
      rents     6 rents: [no houses, 1 house, 2, 3, 4 houses, hotel]
    With no houses, a full color set doubles the base rent.
    Mortgage value is always half the price. */
-function property(name, group, price, houseCost, rents) {
-  return { type: 'property', name, group, price: price * MONEY_SCALE, houseCost: houseCost * MONEY_SCALE, rents: rents.map(r => r * MONEY_SCALE) };
-}
-/* Railroads (here: GO Transit lines): rent depends on how many the owner
-   has (25, 50, 100, 200 on the classic board, scaled up here). */
-function railroad(name) { return { type: 'railroad', name, price: 200 * MONEY_SCALE }; }
-/* Utilities: rent is dice total x 4 (one owned) or x 10 (both owned). */
-function utility(name) { return { type: 'utility', name, price: 150 * MONEY_SCALE }; }
-
-/* SPACES: THE BOARD. Exactly 40 entries, going clockwise from GO.
-
-        20 21 22 23 24 25 26 27 28 29 30
-        19                            31
-        18                            32
-        17                            33
-        16                            34
-        15                            35
-        14                            36
-        13                            37
-        12                            38
-        11                            39
-        10  9  8  7  6  5  4  3  2  1  0   <- GO is bottom right
-
-   Other square types you can place anywhere:
-     { type: 'go',        name: 'GO' }
-     { type: 'jail',      name: 'Jail / Just Visiting' }
-     { type: 'parking',   name: 'Free Parking' }
-     { type: 'gotojail',  name: 'Go To Jail' }
-     { type: 'chance',    name: 'Chance' }
-     { type: 'chest',     name: 'Community Chest' }
-     { type: 'tax',       name: 'Income Tax', amount: 200 }   <- also gets x MONEY_SCALE below
-   Keep GO, Jail, Free Parking and Go To Jail at 0, 10, 20 and 30
-   because those are the four corners.
-
-   ONTARIO EDITION: the 22 colored properties are Ontario municipalities,
-   roughly ordered by population (lowest rent group = smallest population).
-   Boardwalk is Saint-Louis-du-Ha! Ha!, Quebec, by request, and Park Place
-   is Toronto. Railroads are GO Transit rail lines; utilities are Ontario's
-   two big utilities. Swap any name below to re-theme the board. */
-const SPACES = [
-  /*  0 */ { type: 'go', name: 'GO' },
-  /*  1 */ property('Mediterranean Avenue', 'brown', 60, 50, [2, 10, 30, 90, 160, 250]),
-  /*  2 */ { type: 'chest', name: 'Community Chest' },
-  /*  3 */ property('Baltic Avenue', 'brown', 60, 50, [4, 20, 60, 180, 320, 450]),
-  /*  4 */ { type: 'tax', name: 'Income Tax', amount: 200 * MONEY_SCALE },
-  /*  5 */ railroad('Reading Railroad'),
-  /*  6 */ property('Oriental Avenue', 'lightblue', 100, 50, [6, 30, 90, 270, 400, 550]),
-  /*  7 */ { type: 'chance', name: 'Chance' },
-  /*  8 */ property('Vermont Avenue', 'lightblue', 100, 50, [6, 30, 90, 270, 400, 550]),
-  /*  9 */ property('Connecticut Avenue', 'lightblue', 120, 50, [8, 40, 100, 300, 450, 600]),
-  /* 10 */ { type: 'jail', name: 'Jail / Just Visiting' },
-  /* 11 */ property('St. Charles Place', 'pink', 140, 100, [10, 50, 150, 450, 625, 750]),
-  /* 12 */ utility('Electric Company'),
-  /* 13 */ property('States Avenue', 'pink', 140, 100, [10, 50, 150, 450, 625, 750]),
-  /* 14 */ property('Virginia Avenue', 'pink', 160, 100, [12, 60, 180, 500, 700, 900]),
-  /* 15 */ railroad('Pennsylvania Railroad'),
-  /* 16 */ property('St. James Place', 'orange', 180, 100, [14, 70, 200, 550, 750, 950]),
-  /* 17 */ { type: 'chest', name: 'Community Chest' },
-  /* 18 */ property('Tennessee Avenue', 'orange', 180, 100, [14, 70, 200, 550, 750, 950]),
-  /* 19 */ property('New York Avenue', 'orange', 200, 100, [16, 80, 220, 600, 800, 1000]),
-  /* 20 */ { type: 'parking', name: 'Free Parking' },
-  /* 21 */ property('Kentucky Avenue', 'red', 220, 150, [18, 90, 250, 700, 875, 1050]),
-  /* 22 */ { type: 'chance', name: 'Chance' },
-  /* 23 */ property('Indiana Avenue', 'red', 220, 150, [18, 90, 250, 700, 875, 1050]),
-  /* 24 */ property('Illinois Avenue', 'red', 240, 150, [20, 100, 300, 750, 925, 1100]),
-  /* 25 */ railroad('B&O Railroad'),
-  /* 26 */ property('Atlantic Avenue', 'yellow', 260, 150, [22, 110, 330, 800, 975, 1150]),
-  /* 27 */ property('Ventnor Avenue', 'yellow', 260, 150, [22, 110, 330, 800, 975, 1150]),
-  /* 28 */ utility('Water Works'),
-  /* 29 */ property('Marvin Gardens', 'yellow', 280, 150, [24, 120, 360, 850, 1025, 1200]),
-  /* 30 */ { type: 'gotojail', name: 'Go To Jail' },
-  /* 31 */ property('Pacific Avenue', 'green', 300, 200, [26, 130, 390, 900, 1100, 1275]),
-  /* 32 */ property('North Carolina Avenue', 'green', 300, 200, [26, 130, 390, 900, 1100, 1275]),
-  /* 33 */ { type: 'chest', name: 'Community Chest' },
-  /* 34 */ property('Pennsylvania Avenue', 'green', 320, 200, [28, 150, 450, 1000, 1200, 1400]),
-  /* 35 */ railroad('Short Line'),
-  /* 36 */ { type: 'chance', name: 'Chance' },
-  /* 37 */ property('Park Place', 'darkblue', 350, 200, [35, 175, 500, 1100, 1300, 1500]),
-  /* 38 */ { type: 'tax', name: 'Luxury Tax', amount: 100 * MONEY_SCALE },
-  /* 39 */ property('Boardwalk', 'darkblue', 400, 200, [50, 200, 600, 1400, 1700, 2000]),
-];
+const SPACES = window.MonopolyBoard.spaces;
 const BOARD_SIZE = SPACES.length; // 40
 
 /* =====================================================================
@@ -1231,52 +1170,31 @@ const BOARD_SIZE = SPACES.length; // 40
      collectFromAll  value = amount every other player pays you
      payAll          value = amount you pay every other player
    ===================================================================== */
-// $ figures in the card text are filled in below from fmt(), already
-// scaled by MONEY_SCALE, so the cards always match the board's prices.
-const CHANCE_CARDS = [
-  { text: `Advance to GO. Collect ${fmtStatic(200)}.`,            action: 'moveTo', value: 0 },
-  { text: 'Advance to Burlington.',                    action: 'moveTo', value: 24 },
-  { text: 'Take a trip to the Lakeshore West Line.',   action: 'moveTo', value: 5 },
-  { text: 'Advance to Saint-Louis-du-Ha! Ha!.',        action: 'moveTo', value: 39 },
-  { text: `Bank pays you a dividend of ${fmtStatic(50)}.`, action: 'money', value: 50 * MONEY_SCALE },
-  { text: 'Go back 3 spaces.',                         action: 'moveBack', value: 3 },
-  { text: 'Go directly to Jail.',                      action: 'jail' },
-  { text: `Speeding fine. Pay ${fmtStatic(15)}.`,      action: 'money', value: -15 * MONEY_SCALE },
-  { text: `You won a crossword contest. Collect ${fmtStatic(100)}.`, action: 'money', value: 100 * MONEY_SCALE },
-  { text: `You are elected chairman. Pay each player ${fmtStatic(50)}.`, action: 'payAll', value: 50 * MONEY_SCALE },
-];
-const CHEST_CARDS = [
-  { text: `Advance to GO. Collect ${fmtStatic(200)}.`,            action: 'moveTo', value: 0 },
-  { text: `Bank error in your favor. Collect ${fmtStatic(200)}.`, action: 'money', value: 200 * MONEY_SCALE },
-  { text: `Doctor fee. Pay ${fmtStatic(50)}.`,                    action: 'money', value: -50 * MONEY_SCALE },
-  { text: `Sale of stock. Collect ${fmtStatic(50)}.`,             action: 'money', value: 50 * MONEY_SCALE },
-  { text: 'Go directly to Jail.',                                 action: 'jail' },
-  { text: `Holiday fund matures. Collect ${fmtStatic(100)}.`,     action: 'money', value: 100 * MONEY_SCALE },
-  { text: `It is your birthday. Collect ${fmtStatic(10)} from every player.`, action: 'collectFromAll', value: 10 * MONEY_SCALE },
-  { text: `Hospital fees. Pay ${fmtStatic(100)}.`,                action: 'money', value: -100 * MONEY_SCALE },
-  { text: `School fees. Pay ${fmtStatic(50)}.`,                   action: 'money', value: -50 * MONEY_SCALE },
-  { text: `You inherit ${fmtStatic(100)}.`,                       action: 'money', value: 100 * MONEY_SCALE },
-];
+const CHANCE_CARDS = window.MonopolyCards.chance;
+const CHEST_CARDS = window.MonopolyCards.chest;
 
 /* =====================================================================
    SECTION 4. GAME STATE AND UI STATE
 
-   "game" is the memory of the game. Buttons change it, then render()
-   redraws the screen from it. This object is what gets saved.
+  "game" is the serializable engine state. The UI dispatches actions
+  to MonopolyGameEngine, then render() reads the returned state.
+  This object is what gets saved and synchronized by PeerJS.
 
    game = {
-     players:   [{ id, name, color, money, pos, inJail, jailTurns, bankrupt }]
+    players:   [{ id, accountId, name, color, money, pos, inJail, jailTurns, bankrupt }]
      current:   index of the player whose turn it is
+    turnOrder: explicit ordered player ids; turn order is not seat order
      turn:      turn counter (goes up every time the turn passes)
      phase:     'roll' | 'buy' | 'auction' | 'debt' | 'after'
      dice:      [die1, die2]
      doubles:   doubles rolled in a row this turn (3 = jail)
      rolledDouble: last roll was doubles (so roll again)
+    pendingMove, landingPending: the engine-validated movement lifecycle
      owners:    40 entries. null (bank) or a player id
      houses:    40 entries. 0 to 4 houses, 5 means hotel
      mortgaged: 40 entries. true or false
      debt, auction, trade: dialogs in progress (or null)
-     log, over, winner
+    log, over, winnerId, deadlines, pause state
    }
 
    "ui" and the variables below are NOT saved. They only describe what
@@ -1293,6 +1211,88 @@ const ui = { manage: null, deeds: null, peek: null, intro: null, notice: '', vie
    how the connection and the in-game sync work. */
 const net = { role: null, myPid: 0, peer: null, host: null, join: null, myName: '', clientId: '' };
 const tokenPos = {};      // which square each piece is DRAWN on (moves step by step)
+let authoritativeRollRequest = null;
+let authoritativeRollInFlight = false;
+let authoritativeActionInFlight = false;
+let authoritativePendingAction = null;
+let authoritativeAppliedGameId = null;
+let lastAuthoritativeDiceEvent = '';
+let backendLobbyPollId = null;
+let backendLobbyPollInFlight = false;
+function isBackendAuthoritativeGame() {
+  const sync = window.authoritativeGame;
+  return !!(sync && sync.gameId && sync.status === 'ACTIVE');
+}
+function backendActionActorId(state = window.authoritativeGame && window.authoritativeGame.state) {
+  if (!state) return null;
+  if (state.auction) return state.auction.turn;
+  if (state.debt) return state.debt.pid;
+  const current = state.turnOrder && state.turnOrder[state.current];
+  return current == null ? null : current;
+}
+function backendAccountControlsPlayer(playerId, state = window.authoritativeGame && window.authoritativeGame.state) {
+  if (!isBackendAuthoritativeGame() || !accountUser || !state) return false;
+  const player = state.players.find(candidate => candidate.id === playerId);
+  return !!player && player.accountId === accountUser.id && backendActionActorId(state) === playerId;
+}
+function backendCanManagePlayer(playerId) {
+  const sync = window.authoritativeGame;
+  return !!(isBackendAuthoritativeGame() && sync.state && backendAccountControlsPlayer(playerId) &&
+    MonopolyGameEngine.canManage(sync.state) && sync.state.owners.some(owner => owner === playerId));
+}
+function authoritativeActionSpec(name, args) {
+  const position = Number(args[0]);
+  switch (name) {
+    case 'buyProperty': return { type: 'BUY_PROPERTY' };
+    case 'skipBuy': return { type: 'DECLINE_PROPERTY' };
+    case 'auctionBid': return { type: 'AUCTION_BID', amount: args[0] };
+    case 'auctionFold': return { type: 'AUCTION_FOLD' };
+    case 'buildHouse': return { type: 'BUY_HOUSE', position };
+    case 'sellHouse': return { type: 'SELL_HOUSE', position };
+    case 'mortgage': return { type: 'MORTGAGE_PROPERTY', position };
+    case 'unmortgage': return { type: 'UNMORTGAGE_PROPERTY', position };
+    case 'payDebt': return { type: 'PAY_DEBT' };
+    case 'declareBankruptcy': return { type: 'CONFIRM_BANKRUPTCY' };
+    case 'payJailFine': return { type: 'PAY_JAIL_FINE' };
+    case 'endTurnClick': return { type: 'END_TURN' };
+    default: return null;
+  }
+}
+async function submitAuthoritativeGameplayAction(name, action) {
+  const sync = window.authoritativeGame;
+  if (!sync || !isBackendAuthoritativeGame() || authoritativeActionInFlight) return;
+  if (authoritativePendingAction && authoritativePendingAction.gameId === sync.gameId && authoritativePendingAction.name !== name) {
+    notify('Retry the pending action before submitting another action.');
+    return;
+  }
+  const pending = authoritativePendingAction && authoritativePendingAction.gameId === sync.gameId && authoritativePendingAction.name === name
+    ? authoritativePendingAction
+    : { gameId: sync.gameId, expectedVersion: sync.version, requestId: sync.createRequestId(), name, action };
+  authoritativePendingAction = pending;
+  authoritativeActionInFlight = true;
+  const trigger = document.activeElement && document.activeElement.tagName === 'BUTTON' ? document.activeElement : null;
+  if (trigger) trigger.disabled = true;
+  try {
+    await sync.submitGameAction({
+      gameId: pending.gameId,
+      expectedVersion: pending.expectedVersion,
+      requestId: pending.requestId,
+      action: pending.action,
+    });
+    authoritativePendingAction = null;
+    ui.notice = '';
+  } catch (error) {
+    if (error.code === 'NETWORK_ERROR' || error.status >= 500) {
+      ui.notice = 'The server connection failed. Retry this action to safely check its result.';
+    } else {
+      authoritativePendingAction = null;
+      ui.notice = error.message || 'The action could not be submitted.';
+    }
+  } finally {
+    authoritativeActionInFlight = false;
+    if (game) render();
+  }
+}
 
 /* =====================================================================
    MULTIPLAYER DEBUG LOG
@@ -1337,6 +1337,7 @@ const reduceMotion = false;
 let prevMoney = {}, prevOwners = null, prevHouses = null, modalKey = '';
 
 const setup = { count: 2, names: ['Player 1', 'Player 2', 'Player 3', 'Player 4'], screen: '' };
+let selectedHostBoard = null;
 
 /* THE ONLINE RANDOMNESS SHIM
    Online play needs every screen to land on the exact same dice rolls
@@ -1395,6 +1396,7 @@ function guestReceiveRng(v) {
 // Small helpers used everywhere
 const $ = id => document.getElementById(id);
 const cur = () => game.players[game.turnOrder[game.current]];
+const spaceLabel = index => game && game.boardNames && game.boardNames[index] || SPACES[index].name;
 const fmt = n => '$' + Math.round(n).toLocaleString('en-CA');
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const rollDie = async () => 1 + Math.floor(await rnd() * 6);
@@ -1415,31 +1417,26 @@ function inkFor(hex) {
   return 1.05 / (L + 0.05) > (L + 0.05) / 0.056 ? '#fff' : '#111';
 }
 
-function newGame(names, colors) {
+function newGame(names, colors, boardNames = {}, accountIds = []) {
   // Player "id" is a fixed seat number (0 = host, 1..3 = guests in join
   // order) that never changes. Turn ORDER is a separate shuffled list of
   // ids called turnOrder; game.current is an index into turnOrder, not a
   // player id. This keeps each person's seat stable in online play even
   // though who goes first is random.
-  game = {
-    players: names.map((n, i) => ({
-      id: i, name: n, color: (colors && colors[i]) || PLAYER_COLORS[i], money: START_MONEY,
-      pos: 0, inJail: false, jailTurns: 0, bankrupt: false,
-    })),
-    turnOrder: names.map((n, i) => i),
-    current: 0, turn: 1, phase: 'roll', dice: [0, 0], doubles: 0, rolledDouble: false,
-    owners: Array(BOARD_SIZE).fill(null),
-    houses: Array(BOARD_SIZE).fill(0),
-    mortgaged: Array(BOARD_SIZE).fill(false),
-    debt: null, auction: null, trade: null, confirmBankrupt: false,
-    log: [], over: false, winner: null,
-    rev: 0,        // bumped every time the host finishes an action; travels with the state so every client can tell which snapshot is newer
-    cardSeq: 0,    // Chance/Community Chest popup id counter -- part of the shared state (see showCard/closeCard) so it survives a guest reconnecting mid-card
-    tradeTimerEnd: null,   // epoch ms when the current player's 75s trade/action window ends, or null
-    viewTrade: null,       // { fromName, toName, give[], giveCash, get[], getCash, expiresAt } shown to everyone for 10s after a trade completes
-    paused: false, pausedAt: null,   // host-only full-game pause (see hostSetPause)
-  };
-  log(`Game started. ${cur().name} goes first.`);
+  game = MonopolyGameEngine.createState({
+    names, colors: colors || PLAYER_COLORS, accountIds, boardNames,
+    boardSize: BOARD_SIZE, startMoney: START_MONEY,
+  });
+}
+
+function applyGameAction(action) {
+  const result = MonopolyGameEngine.applyAction(game, action, {
+    spaces: SPACES, jailFine: JAIL_FINE, jailPosition: JAIL_POS,
+    goSalary: GO_SALARY, mortgageInterest: MORTGAGE_INTEREST,
+  });
+  if (result.error) return null;
+  game = result.state;
+  return result;
 }
 
 // Called after newGame() or after loading a save: builds the screen.
@@ -1451,12 +1448,12 @@ function attachGame() {
   // must never carry over between games or across a fresh snapshot load.
   for (const k in cardCloseFlags) delete cardCloseFlags[k];
   for (const k in cardCloseWaiters) delete cardCloseWaiters[k];
-  if (!game.turn) game.turn = 1;
   game.players.forEach(p => { tokenPos[p.id] = p.pos; });
   document.documentElement.style.setProperty('--k', reduceMotion ? 0 : ANIM_SCALE);
   buildShell();
   setDice(game.dice[0], game.dice[1]);
-  startGameTick();
+  if (isBackendAuthoritativeGame()) stopGameTick();
+  else startGameTick();
   render();
 }
 
@@ -1471,6 +1468,7 @@ const diceSound = document.getElementById('diceSound');
 const moneySound = document.getElementById('moneySound');
 const jailSound = document.getElementById('jailSound');
 let musicVolume = 0.35;
+let soundEffectsVolume = 1;
 // MAX_MUSIC_VOLUME caps how loud the music can ever get, as a fraction of
 // full system/element volume (1.0 = no cap). The slider itself still runs
 // 0-100%; that percentage is scaled down into this ceiling before being
@@ -1481,10 +1479,18 @@ try {
   if (saved !== null) musicVolume = +saved;
 } catch (e) { /* localStorage unavailable, use default */ }
 if (bgMusic) bgMusic.volume = musicVolume * MAX_MUSIC_VOLUME;
+function applySoundEffectsVolume() {
+  [diceSound, moneySound, jailSound].forEach(audio => { if (audio) audio.volume = soundEffectsVolume; });
+}
+applySoundEffectsVolume();
 function setMusicVolume(pct) {
   musicVolume = Math.max(0, Math.min(100, +pct)) / 100;
   if (bgMusic) bgMusic.volume = musicVolume * MAX_MUSIC_VOLUME;
-  try { localStorage.setItem('monopolyMusicVolume', musicVolume); } catch (e) {}
+  ['volSlider', 'accountMusicVolume'].forEach(id => { const slider = $(id); if (slider) slider.value = Math.round(musicVolume * 100); });
+  if (!accountUser) {
+    try { localStorage.setItem('monopolyMusicVolume', musicVolume); } catch (e) {}
+  }
+  queueAccountSettings({ musicVolume: Math.round(musicVolume * 100) });
 }
 // RANDOM START POSITION
 // Each time the game loads, the music should begin at a random point
@@ -1561,7 +1567,7 @@ function tone(freq, dur, type = 'sine', vol = 0.06, delay = 0) {
     const t = audioCtx.currentTime + delay;
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
     o.type = type; o.frequency.value = freq;
-    g.gain.setValueAtTime(vol, t);
+    g.gain.setValueAtTime(vol * soundEffectsVolume, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(audioCtx.destination);
     o.start(t); o.stop(t + dur);
@@ -1581,29 +1587,15 @@ const sfx = {
    Functions that answer questions about the rules.
    ===================================================================== */
 function groupSquares(group) { return SPACES.map((s, i) => (s.group === group ? i : -1)).filter(i => i >= 0); }
-function ownsFullSet(pid, group) { return groupSquares(group).every(i => game.owners[i] === pid); }
-function groupHasHouses(group) { return groupSquares(group).some(i => game.houses[i] > 0); }
-function groupHasMortgage(group) { return groupSquares(group).some(i => game.mortgaged[i]); }
-function countOwned(pid, type) { return SPACES.filter((s, i) => s.type === type && game.owners[i] === pid).length; }
+function ownsFullSet(pid, group) { return MonopolyGameEngine.ownsFullSet(game, SPACES, pid, group); }
+function groupHasHouses(group) { return MonopolyGameEngine.groupHasHouses(game, SPACES, group); }
+function groupHasMortgage(group) { return MonopolyGameEngine.groupHasMortgage(game, SPACES, group); }
+function countOwned(pid, type) { return MonopolyGameEngine.countOwned(game, SPACES, pid, type); }
 function houseLabel(n) { return n === 5 ? 'hotel' : n === 1 ? '1 house' : n + ' houses'; }
-function ownedSquares(pid) {
-  const out = [];
-  for (let i = 0; i < BOARD_SIZE; i++) if (game.owners[i] === pid) out.push(i);
-  return out;
-}
+function ownedSquares(pid) { return MonopolyGameEngine.ownedSquares(game, pid); }
 
 // Rent owed for landing on square "pos" (mortgaged squares are checked by the caller)
-function calcRent(pos) {
-  const s = SPACES[pos], owner = game.owners[pos];
-  if (s.type === 'property') {
-    const h = game.houses[pos];
-    if (h > 0) return s.rents[h];
-    return ownsFullSet(owner, s.group) ? s.rents[0] * 2 : s.rents[0];
-  }
-  if (s.type === 'railroad') return 25 * Math.pow(2, countOwned(owner, 'railroad') - 1);
-  if (s.type === 'utility') return (countOwned(owner, 'utility') === 2 ? 10 : 4) * (game.dice[0] + game.dice[1]);
-  return 0;
-}
+function calcRent(pos) { return MonopolyGameEngine.calcRent(game, SPACES, pos); }
 
 // Players may manage property (build, mortgage, trade) on their own turn
 // when nothing is animating and no auction is running.
@@ -1617,39 +1609,28 @@ function calcRent(pos) {
 // through a window where the Trade button looks locked for no reason.
 // 'debt' is included so someone who owes money can still mortgage or
 // sell houses to raise cash.
-function canManage() {
-  return !busy && !popup && !game.over &&
-    (['buy', 'after', 'debt'].includes(game.phase) || (game.phase === 'roll' && game.doubles > 0));
-}
+function canManage() { return !busy && !popup && MonopolyGameEngine.canManage(game); }
 
 /* Building rules:
    - full color set, none of it mortgaged
    - max 5 (5 means a hotel)
    (no even-build requirement -- build in any order within the set) */
-function canBuild(pos, pid) {
-  const s = SPACES[pos];
-  if (s.type !== 'property' || game.owners[pos] !== pid) return false;
-  if (!ownsFullSet(pid, s.group) || groupHasMortgage(s.group)) return false;
-  if (game.houses[pos] >= 5 || game.players[pid].money < s.houseCost) return false;
-  return true;
-}
-function canSell(pos, pid) {
-  const s = SPACES[pos];
-  if (s.type !== 'property' || game.owners[pos] !== pid || game.houses[pos] === 0) return false;
-  return true;
-}
+function canBuild(pos, pid) { return MonopolyGameEngine.canBuild(game, SPACES, pos, pid); }
+function canSell(pos, pid) { return MonopolyGameEngine.canSell(game, SPACES, pos, pid); }
 function buildHouse(pos) {
   const p = cur();
-  if (!canManage() || !canBuild(pos, p.id)) return;
-  p.money -= SPACES[pos].houseCost; game.houses[pos]++;
-  log(`${p.name} built on ${SPACES[pos].name} (${houseLabel(game.houses[pos])}).`);
+  if (!canManage()) return;
+  const result = applyGameAction({ type: 'BUY_HOUSE', playerId: p.id, position: pos });
+  if (!result) return;
+  log(`${p.name} built on ${spaceLabel(pos)} (${houseLabel(game.houses[pos])}).`);
   render();
 }
 function sellHouse(pos) {
   const p = cur();
-  if (!canManage() || !canSell(pos, p.id)) return;
-  p.money += SPACES[pos].houseCost / 2; game.houses[pos]--;
-  log(`${p.name} sold a house on ${SPACES[pos].name}.`);
+  if (!canManage()) return;
+  const result = applyGameAction({ type: 'SELL_HOUSE', playerId: p.id, position: pos });
+  if (!result) return;
+  log(`${p.name} sold a house on ${spaceLabel(pos)}.`);
   render();
 }
 
@@ -1658,26 +1639,23 @@ function sellHouse(pos) {
    - a mortgaged square collects no rent
    - a square cannot be mortgaged while any square of its color has houses
    - to unmortgage, pay the mortgage plus 10 percent */
-function mortgageValue(pos) { return SPACES[pos].price / 2; }
-function unmortgageCost(pos) { return Math.ceil(mortgageValue(pos) * (1 + MORTGAGE_INTEREST)); }
-function canMortgage(pos, pid) {
-  const s = SPACES[pos];
-  if (!s.price || game.owners[pos] !== pid || game.mortgaged[pos]) return false;
-  if (s.type === 'property' && groupHasHouses(s.group)) return false;
-  return true;
-}
+function mortgageValue(pos) { return MonopolyGameEngine.mortgageValue(SPACES, pos); }
+function unmortgageCost(pos) { return MonopolyGameEngine.unmortgageCost(SPACES, pos, MORTGAGE_INTEREST); }
+function canMortgage(pos, pid) { return MonopolyGameEngine.canMortgage(game, SPACES, pos, pid); }
 function mortgage(pos) {
   const p = cur();
-  if (!canManage() || !canMortgage(pos, p.id)) return;
-  p.money += mortgageValue(pos); game.mortgaged[pos] = true;
-  log(`${p.name} mortgaged ${SPACES[pos].name} for ${fmt(mortgageValue(pos))}.`);
+  if (!canManage()) return;
+  const result = applyGameAction({ type: 'MORTGAGE_PROPERTY', playerId: p.id, position: pos });
+  if (!result) return;
+  log(`${p.name} mortgaged ${spaceLabel(pos)} for ${fmt(mortgageValue(pos))}.`);
   render();
 }
 function unmortgage(pos) {
   const p = cur();
-  if (!canManage() || game.owners[pos] !== p.id || !game.mortgaged[pos] || p.money < unmortgageCost(pos)) return;
-  p.money -= unmortgageCost(pos); game.mortgaged[pos] = false;
-  log(`${p.name} paid ${fmt(unmortgageCost(pos))} to unmortgage ${SPACES[pos].name}.`);
+  if (!canManage()) return;
+  const result = applyGameAction({ type: 'UNMORTGAGE_PROPERTY', playerId: p.id, position: pos });
+  if (!result) return;
+  log(`${p.name} paid ${fmt(unmortgageCost(pos))} to unmortgage ${spaceLabel(pos)}.`);
   render();
 }
 
@@ -2076,37 +2054,47 @@ function hop(id, ms) {
 
 /* Movement. Time per step shrinks for long trips so they stay quick. */
 function stepTime(n) { return T(Math.max(70, Math.min(230, Math.round(2600 / Math.max(n, 1))))); }
-async function stepTo(p, sq, ms) {
+async function stepTo(playerId, direction, ms) {
+  const result = applyGameAction({ type: 'MOVE_STEP', playerId, direction });
+  if (!result) return [];
+  const player = game.players[playerId], position = player.pos;
   $('tokens').style.setProperty('--step', ms + 'ms');
-  tokenPos[p.id] = sq;
-  updateTokens(); hop(p.id, ms); sfx.step(); moveCameraFocus(sq, ms, 'follow');
+  tokenPos[player.id] = position;
+  updateTokens(); hop(player.id, ms); sfx.step(); moveCameraFocus(position, ms, 'follow');
   await sleep(ms);
-  p.pos = sq;
+  return result.events;
 }
 async function moveForward(p, steps) {
+  const playerId = p.id;
   const ms = stepTime(steps);
-  moveCameraFocus(p.pos, T(400), 'follow');
+  moveCameraFocus(game.players[playerId].pos, T(400), 'follow');
   await sleep(T(200));
   for (let i = 0; i < steps; i++) {
-    const sq = (p.pos + 1) % BOARD_SIZE;
-    await stepTo(p, sq, ms);
-    if (sq === 0) { p.money += GO_SALARY; log(`${p.name} passes GO and collects ${fmt(GO_SALARY)}.`); render(); }
+    const events = await stepTo(playerId, 1, ms);
+    if (events.some(event => event.type === 'GO_SALARY_COLLECTED')) {
+      log(`${p.name} passes GO and collects ${fmt(GO_SALARY)}.`);
+      render();
+    }
   }
 }
 async function moveBackward(p, steps) {
+  const playerId = p.id;
   const ms = stepTime(steps);
-  for (let i = 0; i < steps; i++) await stepTo(p, (p.pos - 1 + BOARD_SIZE) % BOARD_SIZE, ms);
+  for (let i = 0; i < steps; i++) await stepTo(playerId, -1, ms);
 }
 async function moveToSquare(p, target) {
-  const steps = (target - p.pos + BOARD_SIZE) % BOARD_SIZE;
+  const steps = (target - game.players[p.id].pos + BOARD_SIZE) % BOARD_SIZE;
   if (steps > 0) await moveForward(p, steps);
 }
 // Jail: the piece slides straight across the board.
 async function sendToJail(p) {
+  if (!applyGameAction({ type: 'SEND_TO_JAIL', playerId: p.id })) return;
+  await animateJail(p.id);
+}
+async function animateJail(playerId) {
   sfx.jail();
   $('tokens').style.setProperty('--step', T(700) + 'ms');
-  p.pos = JAIL_POS; tokenPos[p.id] = JAIL_POS;
-  p.inJail = true; p.jailTurns = 0; game.rolledDouble = false; game.doubles = 0;
+  tokenPos[playerId] = JAIL_POS;
   updateTokens(); moveCameraFocus(JAIL_POS, T(700), 'follow');
   await sleep(T(800));
 }
@@ -2166,6 +2154,9 @@ function closeCard(id) {
    ===================================================================== */
 async function rollDice() {
   if (busy || game.over || game.phase !== 'roll' || ui.manage) return;
+
+  if (isBackendAuthoritativeGame()) return submitAuthoritativeRoll();
+
   // Clear only an abandoned DRAFT of the current player's own trade (never
   // sent). A trade that has already been sent -- or postponed -- belongs to
   // its sender/receiver, not to whoever's turn it happens to be, and must
@@ -2176,39 +2167,92 @@ async function rollDice() {
   beginMovementCamera();
   moveCameraReset(T(400));
   try { $('scene').scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' }); } catch (e) {}
-  const p = cur();
+  const p = cur(), wasInJail = p.inJail;
   const a = await rollDie(), b = await rollDie(), isDouble = a === b;
   await animateDice(a, b);
-  game.dice = [a, b];
+  const result = applyGameAction({ type: 'ROLL_DICE', playerId: p.id, dice: [a, b] });
+  if (!result) { busy = false; finishMovementCamera(T(600)); render(); return; }
+  const rolled = result.events.find(event => event.type === 'DICE_ROLLED');
+  const active = game.players[p.id];
   log(`${p.name} rolled ${a} + ${b}${isDouble ? ' (doubles)' : ''}.`);
 
-  if (p.inJail) {
-    game.rolledDouble = false;
+  if (wasInJail) {
     if (isDouble) {                              // doubles free you, no extra roll
-      p.inJail = false; p.jailTurns = 0;
       log(`${p.name} rolled doubles and leaves jail.`);
-      await doMove(p, a + b);
-    } else {
-      p.jailTurns++;
-      if (p.jailTurns >= 3) {                    // third failed try: pay and move
-        p.inJail = false; p.jailTurns = 0;
-        log(`${p.name} pays ${fmt(JAIL_FINE)} after 3 tries.`);
-        if (pay(p, JAIL_FINE, null, true)) await doMove(p, a + b);
-      } else {
-        log(`No doubles. ${p.name} stays in jail.`);
-      }
+      await doMove(active, a + b);
+    } else if (result.events.some(event => event.type === 'JAIL_FINE_DUE')) {
+      log(`${p.name} pays ${fmt(JAIL_FINE)} after 3 tries.`);
+      presentPaymentEvents(result.events);
+      if (result.events.some(event => event.type === 'MOVE_REQUESTED')) await doMove(game.players[p.id], a + b);
+    } else if (result.events.some(event => event.type === 'JAIL_ROLL_FAILED')) {
+      log(`No doubles. ${p.name} stays in jail.`);
     }
-  } else {
-    game.doubles = isDouble ? game.doubles + 1 : 0;   // 3 doubles in a row = jail
-    if (game.doubles === 3) {
+  } else if (result.events.some(event => event.type === 'THREE_DOUBLES_JAIL')) {
       log(`Three doubles in a row. ${p.name} goes to jail.`);
-      await sendToJail(p);
-    } else {
-      game.rolledDouble = isDouble;
-      await doMove(p, a + b);
-    }
+      await sendToJail(game.players[p.id]);
+  } else if (rolled && result.events.some(event => event.type === 'MOVE_REQUESTED')) {
+    await doMove(active, a + b);
   }
   endOfMovePipeline();
+}
+
+function backendRollIsLegal() {
+  const sync = window.authoritativeGame;
+  const state = sync && sync.state;
+  if (!isBackendAuthoritativeGame() || !accountUser || !state || state.over || state.paused) return false;
+  const player = state.players.find(candidate => candidate.accountId === accountUser.id);
+  const current = state.players[state.turnOrder[state.current]];
+  return !!player && !!current && current.id === player.id &&
+    MonopolyGameEngine.legalActions(state, SPACES).some(action => action.type === 'ROLL_DICE' && action.playerId === player.id);
+}
+
+async function submitAuthoritativeRoll() {
+  if (authoritativeRollInFlight || !backendRollIsLegal()) return;
+  const sync = window.authoritativeGame;
+  if (!authoritativeRollRequest || authoritativeRollRequest.gameId !== sync.gameId) {
+    authoritativeRollRequest = {
+      gameId: sync.gameId,
+      expectedVersion: sync.version,
+      requestId: sync.createRequestId(),
+    };
+  }
+
+  authoritativeRollInFlight = true;
+  busy = true;
+  ui.notice = '';
+  render();
+  try {
+    await sync.submitGameAction({
+      gameId: authoritativeRollRequest.gameId,
+      expectedVersion: authoritativeRollRequest.expectedVersion,
+      requestId: authoritativeRollRequest.requestId,
+      action: { type: 'ROLL_DICE' },
+    });
+    authoritativeRollRequest = null;
+  } catch (error) {
+    if (error.code === 'STALE_VERSION') {
+      authoritativeRollRequest = null;
+      ui.notice = 'The game changed. Check the current turn before rolling again.';
+    } else if (error.code === 'NOT_YOUR_TURN') {
+      authoritativeRollRequest = null;
+      ui.notice = 'It is not your turn to roll.';
+    } else if (error.code === 'NETWORK_ERROR' || error.status >= 500) {
+      authoritativeRollRequest = {
+        gameId: sync.gameId,
+        expectedVersion: error.expectedVersion || authoritativeRollRequest.expectedVersion,
+        requestId: error.requestId || authoritativeRollRequest.requestId,
+      };
+      ui.notice = 'The server connection failed. Retry Roll to safely check this same request.';
+    } else {
+      authoritativeRollRequest = null;
+      ui.notice = error.message || 'The roll could not be submitted.';
+    }
+  } finally {
+    authoritativeRollInFlight = false;
+    busy = false;
+    finishMovementCamera(T(600));
+    render();
+  }
 }
 
 // Runs after any move finishes: unlock buttons, zoom out, continue.
@@ -2222,11 +2266,15 @@ function endOfMovePipeline() {
   if (game.phase === 'buy' || game.phase === 'debt' || game.phase === 'auction') render();
   else finishAction();
 }
-function startTradeTimer() { if (game && !game.over) game.tradeTimerEnd = Date.now() + TRADE_TIMER_MS; }
+function startTradeTimer(now = Date.now()) {
+  if (!game || game.over) return;
+  applyGameAction({ type: 'START_TRADE_TIMER', now, durationMs: TRADE_TIMER_MS });
+}
 
 async function doMove(p, steps) {
   await moveForward(p, steps);
-  log(`${p.name} lands on ${SPACES[p.pos].name}.`);
+  p = game.players[p.id];
+  log(`${p.name} lands on ${spaceLabel(p.pos)}.`);
   render();
   await sleep(T(300));
   await land(p);
@@ -2234,124 +2282,110 @@ async function doMove(p, steps) {
 
 // Decide what happens on the square the player is standing on.
 async function land(p) {
-  const pos = p.pos, s = SPACES[pos];
-  switch (s.type) {
-    case 'property': case 'railroad': case 'utility': {
-      const ownerId = game.owners[pos];
-      if (ownerId === null) {
-        game.phase = 'buy';
-        log(`${s.name} is for sale at ${fmt(s.price)}.`);
-      } else if (ownerId !== p.id) {
-        if (game.mortgaged[pos]) { log(`${s.name} is mortgaged. No rent.`); break; }
-        const owner = game.players[ownerId], rent = calcRent(pos);
-        log(`${p.name} owes ${owner.name} ${fmt(rent)} rent.`);
-        pay(p, rent, owner);
-      } else {
-        log(`${p.name} owns this one already.`);
+  const position = p.pos, label = spaceLabel(position);
+  const result = applyGameAction({ type: 'LAND_ON_SPACE', playerId: p.id, position });
+  if (!result) return;
+  for (const event of result.events) {
+    switch (event.type) {
+      case 'PROPERTY_AVAILABLE':
+        log(`${label} is for sale at ${fmt(event.amount)}.`);
+        break;
+      case 'NO_RENT_MORTGAGED':
+        log(`${label} is mortgaged. No rent.`);
+        break;
+      case 'RENT_DUE': {
+        const owner = game.players[event.ownerId];
+        log(`${p.name} owes ${owner.name} ${fmt(event.amount)} rent.`);
+        break;
       }
-      break;
+      case 'LANDING_OWN_PROPERTY':
+        log(`${p.name} owns this one already.`);
+        break;
+      case 'TAX_DUE':
+        log(`${p.name} pays ${fmt(event.amount)} in tax.`);
+        break;
+      case 'LANDING_GO_TO_JAIL':
+        log(`${p.name} goes to jail.`);
+        await sendToJail(game.players[p.id]);
+        break;
+      case 'CARD_DRAW_REQUESTED':
+        await drawCard(game.players[p.id], event.deck === 'chance' ? CHANCE_CARDS : CHEST_CARDS,
+          event.deck === 'chance' ? 'Chance' : 'Community Chest');
+        break;
     }
-    case 'tax':
-      log(`${p.name} pays ${fmt(s.amount)} in tax.`);
-      pay(p, s.amount, null);
-      break;
-    case 'gotojail':
-      log(`${p.name} goes to jail.`);
-      await sendToJail(p);
-      break;
-    case 'chance': await drawCard(p, CHANCE_CARDS, 'Chance'); break;
-    case 'chest':  await drawCard(p, CHEST_CARDS, 'Community Chest'); break;
-    default: break;   // GO, Jail (just visiting), Free Parking
   }
+  presentPaymentEvents(result.events);
 }
 
 async function drawCard(p, deck, label) {
   const card = deck[Math.floor(await rnd() * deck.length)];
   log(`${label}: ${card.text}`);
   await showCard(label, card.text);
-  switch (card.action) {
-    case 'money':
-      if (card.value >= 0) p.money += card.value; else pay(p, -card.value, null);
-      break;
-    case 'moveTo':   await moveToSquare(p, card.value); log(`${p.name} lands on ${SPACES[p.pos].name}.`); await land(p); break;
-    case 'moveBack': await moveBackward(p, card.value); log(`${p.name} lands on ${SPACES[p.pos].name}.`); await land(p); break;
-    case 'jail':     await sendToJail(p); break;
-    case 'collectFromAll':
-      game.players.filter(q => q.id !== p.id && !q.bankrupt).forEach(q => pay(q, card.value, p));
-      break;
-    case 'payAll':
-      // If the player cannot pay everyone, they go into debt on the first
-      // unpaid player and the remaining payments are skipped. Keeps it simple.
-      for (const q of game.players.filter(q => q.id !== p.id && !q.bankrupt)) {
-        if (!pay(p, card.value, q)) break;
-      }
-      break;
+  const result = applyGameAction({ type: 'APPLY_CARD', playerId: p.id, card });
+  if (!result) return;
+  presentPaymentEvents(result.events);
+  for (const event of result.events) {
+    if (event.type === 'CARD_MOVEMENT_REQUESTED') {
+      const active = game.players[event.playerId];
+      if (event.direction > 0) await moveToSquare(active, event.target);
+      else await moveBackward(active, event.steps);
+      const landed = game.players[event.playerId];
+      log(`${landed.name} lands on ${spaceLabel(landed.pos)}.`);
+      await land(landed);
+    } else if (event.type === 'PLAYER_JAILED') {
+      await animateJail(event.playerId);
+    }
   }
 }
 
 function buyProperty() {
   const p = cur(), s = SPACES[p.pos];
-  if (busy || game.phase !== 'buy' || p.money < s.price) return;
-  p.money -= s.price; game.owners[p.pos] = p.id;
-  log(`${p.name} bought ${s.name} for ${fmt(s.price)}.`);
-  finishAction();
+  if (busy) return;
+  const result = applyGameAction({ type: 'BUY_PROPERTY', playerId: p.id, position: p.pos });
+  if (!result) return;
+  log(`${p.name} bought ${spaceLabel(p.pos)} for ${fmt(s.price)}.`);
+  if (result.events.some(event => event.type === 'DOUBLES_AGAIN')) log('Doubles. Roll again.');
+  render();
 }
 function skipBuy() {
   if (busy || game.phase !== 'buy') return;
-  log(`${cur().name} passed on ${SPACES[cur().pos].name}. Auction time.`);
-  startAuction(cur().pos);
+  const p = cur();
+  const result = applyGameAction({ type: 'DECLINE_PROPERTY', playerId: p.id, position: p.pos });
+  if (!result) return;
+  log(`${p.name} passed on ${spaceLabel(p.pos)}. Auction time.`);
+  render();
 }
 function payJailFine() {
   const p = cur();
-  if (busy || game.phase !== 'roll' || !p.inJail || p.money < JAIL_FINE) return;
-  p.money -= JAIL_FINE; p.inJail = false; p.jailTurns = 0;
+  if (busy) return;
+  if (!applyGameAction({ type: 'PAY_JAIL_FINE', playerId: p.id })) return;
   log(`${p.name} paid ${fmt(JAIL_FINE)} and leaves jail.`);
   render();
 }
 
 // After everything resolves: roll again (doubles) or wait for End turn.
 function finishAction() {
-  const p = cur();
-  game.debt = null; game.auction = null; game.confirmBankrupt = false;
-  if (game.over) { render(); return; }
-  if (p.bankrupt) { endTurn(); return; }
-  if (game.rolledDouble && !p.inJail) { game.phase = 'roll'; log('Doubles. Roll again.'); }
-  else game.phase = 'after';
+  const result = applyGameAction({ type: 'COMPLETE_ACTION' });
+  if (!result) return;
+  if (result.events.some(event => event.type === 'DOUBLES_AGAIN')) log('Doubles. Roll again.');
+  if (result.events.some(event => event.type === 'TURN_CHANGED')) log(`${cur().name}'s turn.`);
   render();
 }
 function endTurnClick() { if (!busy && game.phase === 'after' && !ui.manage) endTurn(); }
 function endTurn() {
-  if (game.over) { render(); return; }
-  game.doubles = 0; game.rolledDouble = false;
-  // A trade that has already been sent (stage 'review', postponed or not)
-  // survives the turn ending -- only an unsent draft is thrown away.
-  if (game.trade && ['pick', 'edit'].includes(game.trade.stage)) game.trade = null;
-  game.tradeTimerEnd = null;
-  let n = game.current;
-  do { n = (n + 1) % game.turnOrder.length; } while (game.players[game.turnOrder[n]].bankrupt);
-  game.current = n; game.phase = 'roll'; game.turn = (game.turn || 1) + 1;
+  const result = applyGameAction({ type: 'END_TURN' });
+  if (!result) { render(); return; }
   log(`${cur().name}'s turn.`);
   render();
 }
 
 /* ---- Host pause: freezes the whole game state for everyone ---- */
-function hostSetPause(paused) {
+function hostSetPause(paused, now = Date.now()) {
   if (!game || game.over) return;
   paused = !!paused;
   if (paused === !!game.paused) return;
-  if (paused) {
-    game.paused = true; game.pausedAt = Date.now();
-    log('The host paused the game.');
-  } else {
-    // Shift every wall-clock deadline forward by exactly how long the
-    // pause lasted, so both timers resume from precisely where they
-    // stopped instead of the paused time counting against them.
-    const dur = Date.now() - (game.pausedAt || Date.now());
-    if (game.tradeTimerEnd) game.tradeTimerEnd += dur;
-    if (game.viewTrade) game.viewTrade.expiresAt += dur;
-    game.paused = false; game.pausedAt = null;
-    log('The host resumed the game.');
-  }
+  if (!applyGameAction({ type: 'SET_PAUSE', paused, now })) return;
+  log(paused ? 'The host paused the game.' : 'The host resumed the game.');
   render();
 }
 
@@ -2361,22 +2395,15 @@ function hostSetPause(paused) {
    Broadcast like any other action, so every guest reaches the same
    result at (almost) the same moment; the 'final' snapshot behind it
    heals any tiny clock drift, exactly as with every other action. ---- */
-function gameTick() {
+function gameTick(now = Date.now()) {
   if (!game || game.over || game.paused) return;
-  const now = Date.now();
-  if (game.viewTrade && now >= game.viewTrade.expiresAt) game.viewTrade = null;
-  if (game.tradeTimerEnd && now >= game.tradeTimerEnd) {
-    game.tradeTimerEnd = null;
-    // Only force the turn forward if nothing is already mid-animation or
-    // popped up -- an in-progress action gets to finish naturally, and
-    // will start its own fresh timer when control returns (see
-    // endOfMovePipeline). An already-SENT trade is untouched either way:
-    // it lives independently of the timer and the turn (see endTurn).
-    if (!busy && !popup) {
-      if (game.phase === 'after' || (game.phase === 'roll' && game.doubles > 0)) { endTurn(); return; }
-      if (game.phase === 'buy') { log(`${cur().name} ran out of time to decide. Auction time.`); startAuction(cur().pos); return; }
-    }
+  const phase = game.phase;
+  const result = applyGameAction({ type: 'GAME_TICK', now, blocked: busy || !!popup });
+  if (!result) return;
+  if (result.events.some(event => event.type === 'ACTION_TIMER_EXPIRED') && !busy && !popup && phase === 'buy') {
+    log(`${cur().name} ran out of time to decide. Auction time.`);
   }
+  if (result.events.some(event => event.type === 'TURN_CHANGED')) log(`${cur().name}'s turn.`);
   render();
 }
 let gameTickInterval = null;
@@ -2395,64 +2422,33 @@ function startGameTick() {
     const now = Date.now();
     const timerDue = game.tradeTimerEnd && now >= game.tradeTimerEnd;
     const viewDue = game.viewTrade && now >= game.viewTrade.expiresAt;
-    if (timerDue || viewDue) hostRun('gameTick', [], 0);
+    if (timerDue || viewDue) hostRun('gameTick', [now], 0);
   }, 1000);
 }
 function stopGameTick() { if (gameTickInterval) { clearInterval(gameTickInterval); gameTickInterval = null; } }
 
 /* =====================================================================
-   SECTION 9. MONEY PROBLEMS
-   pay() moves cash. If the payer is short:
+  SECTION 9. MONEY PROBLEMS
+  Payment and bankruptcy rules run in the engine. The functions here
+  present debt decisions and engine events:
      - the player whose turn it is gets a DEBT phase. They can mortgage
        and sell houses by hand, then press Pay, or go bankrupt.
      - anyone else is raised cash automatically (houses first, then
        mortgages), or goes bankrupt if that is still not enough.
    Returns true if the payment was made.
    ===================================================================== */
-function liquidationValue(p) {
-  let v = 0;
-  for (let i = 0; i < BOARD_SIZE; i++) {
-    if (game.owners[i] !== p.id) continue;
-    v += game.houses[i] * (SPACES[i].houseCost || 0) / 2;
-    if (!game.mortgaged[i]) v += mortgageValue(i);
-  }
-  return v;
-}
-// Automatic version: sell houses (highest first), then mortgage squares.
-function raiseCash(p, needed) {
-  while (p.money < needed) {
-    let best = -1;
-    for (let i = 0; i < BOARD_SIZE; i++)
-      if (game.owners[i] === p.id && game.houses[i] > 0 && (best === -1 || game.houses[i] > game.houses[best])) best = i;
-    if (best === -1) break;
-    game.houses[best]--; p.money += SPACES[best].houseCost / 2;
-    log(`${p.name} was forced to sell a house on ${SPACES[best].name}.`);
-  }
-  for (let i = 0; i < BOARD_SIZE && p.money < needed; i++) {
-    if (game.owners[i] === p.id && canMortgage(i, p.id)) {
-      game.mortgaged[i] = true; p.money += mortgageValue(i);
-      log(`${p.name} was forced to mortgage ${SPACES[i].name}.`);
+function presentPaymentEvents(events) {
+  for (const event of events) {
+    const p = game.players[event.playerId];
+    if (event.type === 'HOUSE_FORCED_SOLD') log(`${p.name} was forced to sell a house on ${spaceLabel(event.position)}.`);
+    if (event.type === 'PROPERTY_FORCED_MORTGAGED') log(`${p.name} was forced to mortgage ${spaceLabel(event.position)}.`);
+    if (event.type === 'DEBT_CREATED') log(`${p.name} owes ${fmt(event.amount)} but has ${fmt(p.money)}. Raise cash by mortgaging or selling houses.`);
+    if (event.type === 'PLAYER_BANKRUPT') {
+      const recipient = event.creditorId == null ? null : game.players[event.creditorId];
+      log(`${p.name} is bankrupt${recipient ? ' and hands everything to ' + recipient.name : ''}.`);
     }
+    if (event.type === 'GAME_WON') log(`${p.name} wins the game.`);
   }
-}
-function transfer(p, amount, creditor) {
-  p.money -= amount;
-  if (creditor) creditor.money += amount;
-}
-function pay(p, amount, creditor, forceAuto) {
-  if (p.money >= amount) { transfer(p, amount, creditor); return true; }
-  const manual = p.id === cur().id && !forceAuto;
-  if (!manual) {
-    raiseCash(p, amount);
-    if (p.money >= amount) { transfer(p, amount, creditor); return true; }
-    goBankrupt(p, creditor);
-    return false;
-  }
-  if (p.money + liquidationValue(p) < amount) { goBankrupt(p, creditor); return false; }
-  game.debt = { pid: p.id, amount, creditorId: creditor ? creditor.id : null };
-  game.phase = 'debt';
-  log(`${p.name} owes ${fmt(amount)} but has ${fmt(p.money)}. Raise cash by mortgaging or selling houses.`);
-  return false;
 }
 function payDebt() {
   const d = game.debt;
@@ -2460,30 +2456,28 @@ function payDebt() {
   const p = game.players[d.pid];
   if (p.money < d.amount) return;
   ui.manage = null; cameraReset();
-  transfer(p, d.amount, d.creditorId === null ? null : game.players[d.creditorId]);
+  const result = applyGameAction({ type: 'PAY_DEBT', playerId: p.id });
+  if (!result) return;
   log(`${p.name} paid the ${fmt(d.amount)} debt.`);
-  finishAction();
+  if (result.events.some(event => event.type === 'DOUBLES_AGAIN')) log('Doubles. Roll again.');
+  if (result.events.some(event => event.type === 'TURN_CHANGED')) log(`${cur().name}'s turn.`);
+  render();
 }
 function declareBankruptcy() {
   const d = game.debt;
   if (busy || !d) return;
-  if (!game.confirmBankrupt) { game.confirmBankrupt = true; render(); return; }  // needs a second click
-  ui.manage = null; cameraReset();
-  goBankrupt(game.players[d.pid], d.creditorId === null ? null : game.players[d.creditorId]);
-  finishAction();
-}
-function goBankrupt(p, creditor) {
-  log(`${p.name} is bankrupt${creditor ? ' and hands everything to ' + creditor.name : ''}.`);
-  for (let i = 0; i < BOARD_SIZE; i++) {
-    if (game.owners[i] !== p.id) continue;
-    game.owners[i] = creditor ? creditor.id : null;
-    game.houses[i] = 0;
-    if (!creditor) game.mortgaged[i] = false;     // the bank resells them clean
+  if (!game.confirmBankrupt) {
+    if (applyGameAction({ type: 'CONFIRM_BANKRUPTCY', playerId: d.pid })) render();
+    return;
   }
-  if (creditor) creditor.money += Math.max(0, p.money);
-  p.money = 0; p.bankrupt = true;
-  const alive = game.players.filter(q => !q.bankrupt);
-  if (alive.length === 1) { game.over = true; game.winner = alive[0]; log(`${alive[0].name} wins the game.`); }
+  ui.manage = null; cameraReset();
+  const p = game.players[d.pid];
+  const result = applyGameAction({ type: 'CONFIRM_BANKRUPTCY', playerId: d.pid });
+  if (!result) return;
+  presentPaymentEvents(result.events);
+  if (result.events.some(event => event.type === 'DOUBLES_AGAIN')) log('Doubles. Roll again.');
+  if (result.events.some(event => event.type === 'TURN_CHANGED')) log(`${cur().name}'s turn.`);
+  render();
 }
 
 /* =====================================================================
@@ -2495,50 +2489,35 @@ function goBankrupt(p, creditor) {
      - If everybody folds with no bids, the square stays with the bank.
    ===================================================================== */
 function startAuction(pos) {
-  const ids = game.players.filter(q => !q.bankrupt).map(q => q.id);
-  const start = ids.indexOf(cur().id);
-  const order = ids.slice(start + 1).concat(ids.slice(0, start + 1));   // player after the skipper goes first
-  game.auction = { pos, high: 0, highId: null, active: order, turn: order[0] };
-  game.phase = 'auction';
+  if (!applyGameAction({ type: 'START_AUCTION', playerId: cur().id, position: pos })) return;
   render();
 }
 function auctionBid(amount) {
   const a = game.auction;
   if (!a) return;
-  amount = Math.floor(Number(amount));
   const p = game.players[a.turn];
-  if (!(amount > a.high) || amount > p.money) return;
-  a.high = amount; a.highId = p.id;
-  log(`${p.name} bids ${fmt(amount)} for ${SPACES[a.pos].name}.`);
-  const idx = a.active.indexOf(a.turn);
-  stepAuction(a.active[(idx + 1) % a.active.length]);
+  amount = Math.floor(Number(amount));
+  const result = applyGameAction({ type: 'AUCTION_BID', playerId: p.id, amount });
+  if (!result) return;
+  log(`${p.name} bids ${fmt(amount)} for ${spaceLabel(a.pos)}.`);
+  logAuctionResult(result.events);
+  render();
 }
 function auctionFold() {
   const a = game.auction;
   if (!a) return;
-  log(`${game.players[a.turn].name} folds.`);
-  const idx = a.active.indexOf(a.turn);
-  a.active.splice(idx, 1);
-  stepAuction(a.active.length ? a.active[idx % a.active.length] : null);
-}
-function stepAuction(next) {
-  const a = game.auction;
-  if (a.active.length === 0) { endAuction(null); return; }
-  if (a.active.length === 1 && a.highId === a.active[0]) { endAuction(a.highId); return; }
-  if (next === a.highId && a.active.length > 1) next = a.active[(a.active.indexOf(next) + 1) % a.active.length];
-  a.turn = next;
+  const folded = game.players[a.turn];
+  const result = applyGameAction({ type: 'AUCTION_FOLD', playerId: folded.id });
+  if (!result) return;
+  log(`${folded.name} folds.`);
+  logAuctionResult(result.events);
   render();
 }
-function endAuction(winnerId) {
-  const a = game.auction, s = SPACES[a.pos];
-  if (winnerId === null) {
-    log(`Nobody bid. ${s.name} stays with the bank.`);
-  } else {
-    const w = game.players[winnerId];
-    w.money -= a.high; game.owners[a.pos] = winnerId;
-    log(`${w.name} won ${s.name} for ${fmt(a.high)}.`);
-  }
-  finishAction();
+function logAuctionResult(events) {
+  const ended = events.find(event => event.type === 'AUCTION_ENDED');
+  if (!ended) return;
+  if (ended.winnerId === null) log(`Nobody bid. ${spaceLabel(ended.position)} stays with the bank.`);
+  else log(`${game.players[ended.winnerId].name} won ${spaceLabel(ended.position)} for ${fmt(ended.amount)}.`);
 }
 
 /* =====================================================================
@@ -2553,9 +2532,7 @@ function endAuction(winnerId) {
                   stage: 'pick' | 'edit' | 'review', error }
    ===================================================================== */
 function tradable(pos, pid) {
-  const s = SPACES[pos];
-  if (game.owners[pos] !== pid) return false;
-  return !(s.type === 'property' && groupHasHouses(s.group));
+  return MonopolyGameEngine.isTradable(game, SPACES, pos, pid);
 }
 const mortgageFee = pos => Math.ceil(mortgageValue(pos) * MORTGAGE_INTEREST);
 function openTrade() {
@@ -2578,26 +2555,33 @@ function tradeCash(side, v) { game.trade[side + 'Cash'] = Math.max(0, Math.floor
 function cancelTrade() {
   const t = game.trade;
   if (t && t.stage === 'review') log(`${game.players[t.from].name} cancelled the trade with ${game.players[t.to].name}.`);
-  game.trade = null;
+  if (t && !applyGameAction({ type: 'CANCEL_TRADE', playerId: t.from })) return;
   ui.reviewingTrade = false;
   render();
 }
 function validateTrade(t) {
-  const me = game.players[t.from], you = game.players[t.to];
-  if (!t.give.length && !t.get.length && !t.giveCash && !t.getCash) return 'Pick something to trade.';
-  if (t.giveCash > me.money) return `${me.name} only has ${fmt(me.money)}.`;
-  if (t.getCash > you.money) return `${you.name} only has ${fmt(you.money)}.`;
-  if (!t.give.every(i => tradable(i, me.id)) || !t.get.every(i => tradable(i, you.id))) return 'One of those properties cannot be traded right now.';
-  const meFee = t.get.filter(i => game.mortgaged[i]).reduce((s, i) => s + mortgageFee(i), 0);
-  const youFee = t.give.filter(i => game.mortgaged[i]).reduce((s, i) => s + mortgageFee(i), 0);
-  if (me.money - t.giveCash + t.getCash < meFee) return `${me.name} cannot cover the ${fmt(meFee)} mortgage fee.`;
-  if (you.money - t.getCash + t.giveCash < youFee) return `${you.name} cannot cover the ${fmt(youFee)} mortgage fee.`;
-  return '';
+  return tradeValidationMessage(MonopolyGameEngine.validateTrade(game, t, SPACES, MORTGAGE_INTEREST));
+}
+function tradeValidationMessage(validation) {
+  if (!validation || !validation.code) return '';
+  if (validation.code === 'EMPTY_OFFER') return 'Pick something to trade.';
+  if (validation.code === 'INSUFFICIENT_GIVE_CASH' || validation.code === 'INSUFFICIENT_GET_CASH') {
+    const p = game.players[validation.playerId];
+    return `${p.name} only has ${fmt(validation.available)}.`;
+  }
+  if (validation.code === 'PROPERTY_NOT_TRADABLE') return 'One of those properties cannot be traded right now.';
+  if (validation.code === 'GIVE_SIDE_CANNOT_PAY_FEE' || validation.code === 'GET_SIDE_CANNOT_PAY_FEE') {
+    const p = game.players[validation.playerId];
+    return `${p.name} cannot cover the ${fmt(validation.amount)} mortgage fee.`;
+  }
+  return 'That trade is no longer valid.';
 }
 function proposeTrade() {
-  const t = game.trade, err = validateTrade(t);
-  t.error = err;
-  if (!err) t.stage = 'review';
+  const t = game.trade;
+  const result = applyGameAction({ type: 'PROPOSE_TRADE', playerId: t.from });
+  if (!result) return;
+  const rejected = result.events.find(event => event.type === 'TRADE_REJECTED');
+  if (rejected) game.trade.error = tradeValidationMessage(rejected.validation);
   render();
 }
 // The receiver can leave a sent offer open indefinitely instead of
@@ -2607,34 +2591,32 @@ function proposeTrade() {
 function postponeTrade() {
   const t = game.trade;
   if (!t || t.stage !== 'review') return;
-  t.postponed = true;
+  if (!applyGameAction({ type: 'POSTPONE_TRADE', playerId: t.to })) return;
   log(`${game.players[t.to].name} postponed the trade with ${game.players[t.from].name}.`);
   render();
 }
-function acceptTrade() {
-  const t = game.trade, err = validateTrade(t);
-  if (err) { t.error = err; t.stage = 'edit'; t.postponed = false; render(); return; }
+function acceptTrade(now = Date.now()) {
+  const t = game.trade;
+  if (!t) return;
   const me = game.players[t.from], you = game.players[t.to];
-  const names = arr => arr.length ? arr.map(i => SPACES[i].name).join(', ') : 'nothing';
-  t.give.forEach(i => { game.owners[i] = you.id; if (game.mortgaged[i]) you.money -= mortgageFee(i); });
-  t.get.forEach(i => { game.owners[i] = me.id; if (game.mortgaged[i]) me.money -= mortgageFee(i); });
-  me.money += t.getCash - t.giveCash; you.money += t.giveCash - t.getCash;
-  log(`Trade done. ${me.name} gives ${names(t.give)}${t.giveCash ? ' + ' + fmt(t.giveCash) : ''}. ${you.name} gives ${names(t.get)}${t.getCash ? ' + ' + fmt(t.getCash) : ''}.`);
-  // Everyone (not just the two traders) gets a "View Trade" button for the
-  // next 10 seconds showing exactly what changed hands.
-  game.viewTrade = {
-    fromName: me.name, toName: you.name,
-    give: t.give.slice(), giveCash: t.giveCash,
-    get: t.get.slice(), getCash: t.getCash,
-    expiresAt: Date.now() + VIEW_TRADE_MS,
-  };
-  game.trade = null;
+  const names = arr => arr.length ? arr.map(spaceLabel).join(', ') : 'nothing';
+  const trade = { give: t.give.slice(), giveCash: t.giveCash, get: t.get.slice(), getCash: t.getCash };
+  const result = applyGameAction({ type: 'ACCEPT_TRADE', playerId: t.to, now, viewTradeMs: VIEW_TRADE_MS });
+  if (!result) return;
+  const rejected = result.events.find(event => event.type === 'TRADE_REJECTED');
+  if (rejected) {
+    game.trade.error = tradeValidationMessage(rejected.validation);
+    render();
+    return;
+  }
+  log(`Trade done. ${me.name} gives ${names(trade.give)}${trade.giveCash ? ' + ' + fmt(trade.giveCash) : ''}. ${you.name} gives ${names(trade.get)}${trade.getCash ? ' + ' + fmt(trade.getCash) : ''}.`);
   ui.reviewingTrade = false;
   render();
 }
 function declineTrade() {
-  log(`${game.players[game.trade.to].name} declined the trade.`);
-  game.trade = null;
+  const t = game.trade;
+  if (!t || !applyGameAction({ type: 'DECLINE_TRADE', playerId: t.to })) return;
+  log(`${game.players[t.to].name} declined the trade.`);
   ui.reviewingTrade = false;
   render();
 }
@@ -2662,7 +2644,9 @@ function openManage() {
   // check makes every call a no-op for anyone whose turn it isn't,
   // regardless of how the call happens, so the manage panel can never
   // be opened -- or its camera move triggered -- for the wrong player.
-  const mine = !net.role || cur().id === net.myPid;
+  const mine = isBackendAuthoritativeGame()
+    ? backendCanManagePlayer(cur().id)
+    : (!net.role || cur().id === net.myPid);
   if (!mine || !canManage() || ui.manage) return;
   if (!ownedSquares(cur().id).length) { notify('You do not own any properties yet.'); return; }
   ui.manage = { idx: 0, focused: -1 };
@@ -2798,10 +2782,16 @@ function updateTopButtons() {
 }
 function toggleSound() {
   soundOn = !soundOn; updateTopButtons();
+  queueAccountSettings({ interfacePreferences: { ...(accountSettings.interfacePreferences || {}), soundEnabled: soundOn } });
   if (soundOn) { sfx.step(); startBgMusic(); }
   else if (bgMusic) { bgMusic.pause(); }
 }
-function toggleCamera() { cameraOn = !cameraOn; if (!cameraOn) cameraReset(200); updateTopButtons(); }
+function toggleCamera() {
+  cameraOn = !cameraOn;
+  if (!cameraOn) cameraReset(200);
+  updateTopButtons();
+  queueAccountSettings({ cameraPreferences: { follow: cameraOn, tilt: tiltOn } });
+}
 window.addEventListener('resize', () => { if (game && !busy && !ui.manage && $('plane')) cameraReset(0); if (game) fitCellNames(); });
 let newTimer = null;
 function confirmNew() {                 // two clicks so nobody restarts by accident
@@ -2816,7 +2806,7 @@ function confirmNew() {                 // two clicks so nobody restarts by acci
 function renderCells() {
   const focusSq = ui.manage ? manageSquare() : ui.peek;
   for (let i = 0; i < BOARD_SIZE; i++) {
-    const s = SPACES[i], el = $('cell' + i), owner = game.owners[i];
+    const s = { ...SPACES[i], name: spaceLabel(i) }, el = $('cell' + i), owner = game.owners[i];
     let inner = '';
     if (s.type === 'property') {
       const h = game.houses[i], grew = prevHouses && h > prevHouses[i];
@@ -2912,23 +2902,25 @@ function updateHud() {
 // The wooden shelf: manage, deeds, trade, and the main action button
 function updateDock() {
   const p = cur();
-  // In online play, only the person whose turn it is (or, for the debt
-  // dialog, the person who owes money) gets working buttons -- and that
-  // includes the host: being the host is a role, not a gameplay
-  // permission, so the host's own screen must be just as restricted as
-  // any guest's when it isn't the host's turn. Only pure local
-  // pass-and-play (net.role is null -- nobody else is connected, one
-  // device controls every seat) skips this check. Everyone else sees
-  // the same screen but greyed out until it is their turn.
+  // Backend turn ownership governs only the migrated roll action. Other
+  // controls retain their existing PeerJS seat permissions until migrated.
+  const backendMode = isBackendAuthoritativeGame();
   const mine = !net.role || p.id === net.myPid;
-  const debtMine = !net.role || (game.debt && game.players[game.debt.pid].id === net.myPid);
-  const idle = !busy && !popup && !game.over && !ui.manage && mine;
+  const debtMine = backendMode
+    ? !!(game.debt && backendAccountControlsPlayer(game.debt.pid))
+    : (!net.role || (game.debt && game.players[game.debt.pid].id === net.myPid));
+  const idle = !busy && !popup && !game.over && !ui.manage &&
+    (backendMode ? backendAccountControlsPlayer(p.id) : mine) && !authoritativeRollInFlight && !authoritativeActionInFlight;
+  const rollIdle = !busy && !popup && !game.over && !ui.manage &&
+    (backendMode ? backendRollIsLegal() : mine) && !authoritativeRollInFlight;
   const can = canManage() && !ui.manage && mine;
+  const rollHandler = backendMode ? 'rollDice()' : "act('rollDice')";
   let primary = '';
   if (game.over) {
     primary = `<button class="primary" onclick="restart()">Play again</button>`;
   } else if (game.phase === 'roll') {
-    primary = `<button class="primary" ${idle ? '' : 'disabled'} onclick="act('rollDice')">Roll ${DICE_ICON}</button>`;
+    const label = backendMode && authoritativeRollRequest ? 'Retry Roll' : 'Roll';
+    primary = `<button class="primary" ${rollIdle ? '' : 'disabled'} onclick="${rollHandler}">${label} ${DICE_ICON}</button>`;
     if (p.inJail) primary += `<button class="dbtn" ${idle && p.money >= JAIL_FINE ? '' : 'disabled'} onclick="act('payJailFine')">Pay ${fmt(JAIL_FINE)} to leave jail</button>`;
   } else if (game.phase === 'after') {
     primary = `<button class="primary" ${idle ? '' : 'disabled'} onclick="act('endTurnClick')">End turn</button>`;
@@ -2941,7 +2933,7 @@ function updateDock() {
   }
   $('dock').innerHTML = `
     <div class="dock-group props">
-      <button class="dbtn" ${can ? '' : 'disabled'} onclick="openManage()">Manage properties</button>
+      <button class="dbtn" ${(backendMode ? backendCanManagePlayer(p.id) && !authoritativeActionInFlight : can) ? '' : 'disabled'} onclick="openManage()">Manage properties</button>
       <button class="dbtn" ${!busy && !popup && !game.over ? '' : 'disabled'} onclick="openDeeds()">View deeds</button>
       <button class="dbtn" ${can && !game.trade ? '' : 'disabled'} onclick="act('openTrade')">Trade</button>
       ${tradeTimerBadge()}
@@ -2977,7 +2969,7 @@ function updatePauseBtn() {
   if (!el) return;
   const isHost = !net.role || net.myPid === 0;
   if (!game || !isHost || net.role === 'guest') { el.innerHTML = ''; return; }
-  el.innerHTML = `<button class="btn alt" onclick="act('hostSetPause', ${!game.paused})">${game.paused ? 'Resume game' : 'Pause game'}</button>`;
+  el.innerHTML = `<button class="btn alt" onclick="act('hostSetPause', ${!game.paused}, Date.now())">${game.paused ? 'Resume game' : 'Pause game'}</button>`;
 }
 function updatePauseOverlay() {
   const el = $('pauseOverlay');
@@ -2986,7 +2978,7 @@ function updatePauseOverlay() {
   const isHost = !net.role || net.myPid === 0;
   el.style.display = 'flex';
   el.innerHTML = `<div class="pause-text">PAUSED</div>
-    ${isHost ? `<button class="btn" onclick="act('hostSetPause', false)">Resume game</button>`
+    ${isHost ? `<button class="btn" onclick="act('hostSetPause', false, Date.now())">Resume game</button>`
              : `<p class="muted" style="color:#ddd">Waiting for the host to resume...</p>`}`;
 }
 // The "View Trade" button everyone gets for 10s right after a trade
@@ -3029,9 +3021,11 @@ function updateManage() {
   // panel) would show build/mortgage buttons that look clickable but
   // are always silently rejected by the host (see hostOwnershipOK) --
   // confusing when they should just look disabled instead.
-  const p = cur(), s = SPACES[sq], list = ownedSquares(p.id);
-  const mine = !net.role || p.id === net.myPid;
-  const can = canManage() && mine;
+  const p = cur(), s = { ...SPACES[sq], name: spaceLabel(sq) }, list = ownedSquares(p.id);
+  const mine = isBackendAuthoritativeGame()
+    ? backendCanManagePlayer(p.id)
+    : (!net.role || p.id === net.myPid);
+  const can = canManage() && mine && !authoritativeActionInFlight;
   // Cycling with Previous/Next should feel almost instant, not like the
   // slower camera moves elsewhere, so this uses a short fixed time
   // instead of T(...) (which would stretch it with ANIM_SCALE).
@@ -3081,7 +3075,7 @@ function houseSVG(n, red) {
   return `<svg class="hicon" viewBox="0 0 20 20"><path d="M2 10 10 2l8 8v8H2z" fill="${red ? '#d62828' : '#1fa64a'}"/>${n ? `<text x="10" y="16" text-anchor="middle" font-size="9" font-weight="800" fill="#fff">${n}</text>` : ''}</svg>`;
 }
 function deedHTML(pos) {
-  const s = SPACES[pos];
+  const s = { ...SPACES[pos], name: spaceLabel(pos) };
   if (!s.price) return '';
   const owner = game.owners[pos];
   let head, rows = '';
@@ -3121,20 +3115,22 @@ function specialText(s) {
 /* ---- Dialogs ---- */
 function buyHTML() {
   const p = cur(), s = SPACES[p.pos], afford = p.money >= s.price;
-  const mine = !net.role || p.id === net.myPid;
+  const mine = isBackendAuthoritativeGame()
+    ? backendAccountControlsPlayer(p.id)
+    : (!net.role || p.id === net.myPid);
   return `${deedHTML(p.pos)}
     <div class="buy-q">Purchase deed?</div>
     <div class="buy-price">${fmt(s.price)}</div>
     ${afford ? '' : `<div class="error" style="text-align:center">You have ${fmt(p.money)}. Mortgage something to afford it, or auction it.</div>`}
     ${mine ? '' : `<p class="muted" style="text-align:center">Waiting for ${esc(p.name)} to decide...</p>`}
     <div class="row center">
-      <button class="round ok" ${afford && mine ? '' : 'disabled'} onclick="act('buyProperty')" aria-label="Buy">${CHECK_ICON}Buy</button>
-      <button class="round no" ${mine ? '' : 'disabled'} onclick="act('skipBuy')" aria-label="Auction">${X_ICON}Auction</button>
+      <button class="round ok" ${afford && mine && !authoritativeActionInFlight ? '' : 'disabled'} onclick="act('buyProperty')" aria-label="Buy">${CHECK_ICON}Buy</button>
+      <button class="round no" ${mine && !authoritativeActionInFlight ? '' : 'disabled'} onclick="act('skipBuy')" aria-label="Auction">${X_ICON}Auction</button>
     </div>
     ${ownedSquares(p.id).length ? `<div class="row center"><button class="btn alt" ${mine ? '' : 'disabled'} title="${mine ? '' : `Waiting for ${esc(p.name)}'s turn`}" onclick="openManage()">Manage properties</button></div>` : ''}`;
 }
 function peekHTML() {
-  const s = SPACES[ui.peek];
+  const s = { ...SPACES[ui.peek], name: spaceLabel(ui.peek) };
   const body = s.price ? deedHTML(ui.peek) : `<div class="head" style="background:#ddd;color:#111">${esc(s.name)}</div><p>${specialText(s)}</p>`;
   return `<div class="dlg-head"><h2>${esc(s.name)}</h2><button class="btn alt" onclick="closePeek()">Close</button></div>${body}`;
 }
@@ -3144,7 +3140,7 @@ function deedsHTML() {
   if (d.sel === null || !owned.includes(d.sel)) d.sel = owned.length ? owned[0] : null;
   const colored = owned.filter(i => SPACES[i].type === 'property'), misc = owned.filter(i => SPACES[i].type !== 'property');
   const thumb = i => {
-    const s = SPACES[i], col = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#8a8a8a';
+    const s = { ...SPACES[i], name: spaceLabel(i) }, col = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#8a8a8a';
     return `<button class="deed-mini ${d.sel === i ? 'sel' : ''}" onclick="deedsSelect(${i})" title="${esc(s.name)}">
       <span class="dm-head" style="background:${col}"></span><span class="dm-name">${esc(s.name)}${game.mortgaged[i] ? ' (M)' : ''}</span></button>`;
   };
@@ -3165,7 +3161,7 @@ function deedsHTML() {
 // chip, used everywhere a trade is reviewed (sent, postponed, or done).
 function tradeChips(props, cash) {
   const chips = props.map(i => {
-    const s = SPACES[i], color = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#8a8a8a';
+    const s = { ...SPACES[i], name: spaceLabel(i) }, color = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#8a8a8a';
     return `<div class="trade-chip"><span class="swatch" style="background:${color}"></span>${esc(s.name)}${game.mortgaged[i] ? ' <span class="tag">mortgaged</span>' : ''}</div>`;
   });
   if (cash) chips.push(`<div class="trade-chip cash">${fmt(cash)}</div>`);
@@ -3175,7 +3171,7 @@ function propRows(pid, side, selected, editable) {
   const rows = [];
   for (let i = 0; i < BOARD_SIZE; i++) {
     if (game.owners[i] !== pid) continue;
-    const s = SPACES[i], ok = editable && tradable(i, pid), color = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#8a8a8a';
+    const s = { ...SPACES[i], name: spaceLabel(i) }, ok = editable && tradable(i, pid), color = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#8a8a8a';
     rows.push(`<label class="chk"><input type="checkbox" ${selected.includes(i) ? 'checked' : ''} ${ok ? '' : 'disabled'} onchange="toggleTradeProp('${side}', ${i})">
       <span class="swatch" style="background:${color}"></span><span>${esc(s.name)}</span>
       ${game.mortgaged[i] ? '<span class="tag">mortgaged</span>' : ''}${ok || !editable ? '' : '<span class="tag">has houses</span>'}</label>`);
@@ -3210,8 +3206,8 @@ function tradeHTML() {
       // cancelling anything.
       return `<h2>Trade postponed</h2>${summary}
         ${recipientMine
-          ? `<p class="muted" style="text-align:center">You postponed this trade. Accept or decline whenever you're ready.</p>
-             <div class="row"><button class="btn" onclick="act('acceptTrade')">Accept</button>
+           ? `<p class="muted" style="text-align:center">You postponed this trade. Accept or decline whenever you're ready.</p>
+             <div class="row"><button class="btn" onclick="act('acceptTrade', Date.now())">Accept</button>
              <button class="btn alt" onclick="act('declineTrade')">Decline</button></div>
              <div class="row"><button class="btn alt" onclick="closeTradeReview()">Close</button></div>`
           : proposerMine
@@ -3224,7 +3220,7 @@ function tradeHTML() {
     return `<h2>${esc(you.name)}, do you accept this trade?</h2>${summary}
       <div class="muted" style="text-align:center">A mortgaged square costs its new owner a 10 percent fee to the bank.</div>
       ${recipientMine ? '' : `<p class="muted" style="text-align:center">Waiting for ${esc(you.name)} to decide...</p>`}
-      <div class="row"><button class="btn" ${recipientMine ? '' : 'disabled'} onclick="act('acceptTrade')">Accept</button>
+      <div class="row"><button class="btn" ${recipientMine ? '' : 'disabled'} onclick="act('acceptTrade', Date.now())">Accept</button>
       <button class="btn alt" ${recipientMine ? '' : 'disabled'} onclick="act('declineTrade')">Decline</button>
       <button class="btn alt" ${recipientMine ? '' : 'disabled'} onclick="act('postponeTrade')">Postpone</button></div>`;
   }
@@ -3243,13 +3239,15 @@ function tradeHTML() {
     <button class="btn alt" ${proposerMine ? '' : 'disabled'} onclick="act('cancelTrade')">Cancel</button></div>`;
 }
 function auctionHTML() {
-  const a = game.auction, s = SPACES[a.pos], bidder = game.players[a.turn];
-  const mine = !net.role || bidder.id === net.myPid;
+  const a = game.auction, s = { ...SPACES[a.pos], name: spaceLabel(a.pos) }, bidder = game.players[a.turn];
+  const mine = isBackendAuthoritativeGame()
+    ? backendAccountControlsPlayer(bidder.id)
+    : (!net.role || bidder.id === net.myPid);
   const color = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#ddd';
   const high = a.highId === null ? 'No bids yet' : `${fmt(a.high)} by ${esc(game.players[a.highId].name)}`;
   const quick = [10, 50, 100].map(n => {
     const amt = a.high + n;
-    return `<button class="btn alt" ${amt > bidder.money || !mine ? 'disabled' : ''} onclick="act('auctionBid', ${amt})">Bid ${fmt(amt)}</button>`;
+    return `<button class="btn alt" ${amt > bidder.money || !mine || authoritativeActionInFlight ? 'disabled' : ''} onclick="act('auctionBid', ${amt})">Bid ${fmt(amt)}</button>`;
   }).join('');
   const roster = game.players.filter(q => !q.bankrupt).map(q => {
     const status = !a.active.includes(q.id) ? 'folded' : q.id === a.highId ? 'top bidder' : q.id === a.turn ? 'bidding now' : 'waiting';
@@ -3260,9 +3258,9 @@ function auctionHTML() {
     <p><b>Current bid:</b> ${high}</p>
     <p><b>${esc(bidder.name)}</b>, it is your turn. You have ${fmt(bidder.money)}.${mine ? '' : ' (waiting for them)'}</p>
     <div class="row">${quick}</div>
-    <div class="row"><input type="number" id="bidInput" min="${a.high + 1}" step="1" value="${a.high + 10}" ${mine ? '' : 'disabled'}>
-      <button class="btn" ${mine ? '' : 'disabled'} onclick="act('auctionBid', document.getElementById('bidInput').value)">Place bid</button>
-      <button class="btn alt" ${mine ? '' : 'disabled'} onclick="act('auctionFold')">Fold</button></div>
+    <div class="row"><input type="number" id="bidInput" min="${a.high + 1}" step="1" value="${a.high + 10}" ${mine && !authoritativeActionInFlight ? '' : 'disabled'}>
+      <button class="btn" ${mine && !authoritativeActionInFlight ? '' : 'disabled'} onclick="act('auctionBid', document.getElementById('bidInput').value)">Place bid</button>
+      <button class="btn alt" ${mine && !authoritativeActionInFlight ? '' : 'disabled'} onclick="act('auctionFold')">Fold</button></div>
     ${roster}`;
 }
 function introHTML() {
@@ -3287,7 +3285,7 @@ function updateModal() {
   } else if (ui.intro) {
     key = 'intro'; html = introHTML(); cls = 'plain wide';
   } else if (game.over) {
-    key = 'over'; html = `<h2>${esc(game.winner.name)} wins the game</h2><p>Everyone else went bankrupt.</p><div class="row"><button class="btn" onclick="restart()">Play again</button></div>`;
+    key = 'over'; html = `<h2>${esc(game.players[game.winnerId].name)} wins the game</h2><p>Everyone else went bankrupt.</p><div class="row"><button class="btn" onclick="restart()">Play again</button></div>`;
   } else if (ui.viewingTrade && game.viewTrade) {
     key = 'viewtrade'; html = viewTradeHTML();
   } else if (ui.manage) {
@@ -3379,7 +3377,7 @@ function render() {
   const nc = $('netControls');
   if (nc) nc.innerHTML = (net.role === 'guest' ? `<button class="btn alt" onclick="joinLeave()">Leave game</button>` : '') +
     (net.role === 'host' && !game.over && connStatus[cur().id] === false ? `<button class="btn alt" onclick="hostSkipDisconnected()">Skip ${esc(cur().name)} (offline)</button>` : '');
-  if (!busy && !popup && !ui.intro && !net.role) saveGame();
+  if (!busy && !popup && !ui.intro && !net.role && !isBackendAuthoritativeGame()) saveGame();
 }
 
 /* =====================================================================
@@ -3388,11 +3386,11 @@ function render() {
 function saveGame() {
   try {
     if (!game || game.over) localStorage.removeItem(SAVE_KEY);
-    else localStorage.setItem(SAVE_KEY, JSON.stringify(game));
+    else localStorage.setItem(SAVE_KEY, MonopolyGameEngine.serializeState(game));
   } catch (e) { /* saving is optional */ }
 }
 function loadSaved() {
-  try { const raw = localStorage.getItem(SAVE_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  try { const raw = localStorage.getItem(SAVE_KEY); return raw ? MonopolyGameEngine.deserializeState(raw) : null; } catch (e) { return null; }
 }
 function resumeGame() {
   const saved = loadSaved();
@@ -3535,10 +3533,13 @@ function hostSuggestLobbyId() {
 // deliberately NOT a full renderSetup(), which would rebuild the name
 // input itself and kick the cursor out of it mid-type.
 function hostSetName(v) {
+  if (accountUser) v = accountUser.username;
   net.myName = v;
   const h = hostState();
   if (h.roster[0]) {
-    h.roster[0].name = (v || 'Host').slice(0, 14);
+    h.roster[0].name = (v || 'Host').slice(0, 24);
+    h.roster[0].accountId = accountUser ? accountUser.id : null;
+    h.roster[0].avatarUrl = accountUser ? accountUser.avatar_url : null;
     hostBroadcastRoster();
     const panel = $('hostRosterPanel');
     if (panel) panel.innerHTML = hostRosterHTML();
@@ -3546,6 +3547,7 @@ function hostSetName(v) {
 }
 function hostOpenLobby(lobbyId) {
   const h = hostState();
+  if (accountUser) net.myName = accountUser.username;
   lobbyId = slugify(lobbyId) || hostSuggestLobbyId();
   h.lobbyId = lobbyId; h.error = ''; h.status = 'Opening the lobby...';
   renderSetup();
@@ -3554,7 +3556,7 @@ function hostOpenLobby(lobbyId) {
   h.peer = peer;
   peer.on('open', () => {
     net.role = 'host'; net.myPid = 0; net.peer = peer;
-    if (!h.roster[0]) h.roster[0] = { pid: 0, name: net.myName || 'Host', clientId: myClientId(), conn: null, connected: true };
+    if (!h.roster[0]) h.roster[0] = { pid: 0, name: net.myName || 'Host', accountId: accountUser?.id || null, avatarUrl: accountUser?.avatar_url || null, clientId: myClientId(), conn: null, connected: true };
     h.status = 'Waiting for players.'; renderSetup();
   });
   peer.on('connection', conn => hostWireGuestConn(conn));
@@ -3590,10 +3592,12 @@ function hostHandleHello(conn, data) {
     if (game) { try { conn.send({ t: 'error', message: 'This game has already started without you.' }); } catch (e) {} return; }
     const pid = hostNextOpenPid();
     if (pid < 0) { try { conn.send({ t: 'error', message: 'This lobby already has 4 players.' }); } catch (e) {} return; }
-    seat = { pid, name: (data.name || `Player ${pid + 1}`).slice(0, 14), clientId: data.clientId, conn, connected: true };
+    seat = { pid, name: (data.name || `Player ${pid + 1}`).slice(0, 24), accountId: data.accountId || null, avatarUrl: data.avatarUrl || null, clientId: data.clientId, conn, connected: true };
     h.roster[pid] = seat;
   } else {
-    seat.conn = conn; seat.connected = true; seat.name = (data.name || seat.name).slice(0, 14);
+    seat.conn = conn; seat.connected = true; seat.name = (data.name || seat.name).slice(0, 24);
+    seat.accountId = data.accountId || seat.accountId || null;
+    seat.avatarUrl = data.avatarUrl || seat.avatarUrl || null;
   }
   try { conn.send({ t: 'welcome', pid: seat.pid }); } catch (e) {}
   if (game) {
@@ -3627,7 +3631,7 @@ function hostConnFlags() {
 }
 function hostBroadcastRoster() {
   const h = hostState();
-  const seats = h.roster.filter(Boolean).map(r => ({ pid: r.pid, name: r.name, connected: r.connected }));
+  const seats = h.roster.filter(Boolean).map(r => ({ pid: r.pid, name: r.name, accountId: r.accountId || null, avatarUrl: r.avatarUrl || null, connected: r.connected }));
   hostSend({ t: 'roster', seats });
   if (game) hostSend({ t: 'conn', connFlags: hostConnFlags() });
 }
@@ -3650,7 +3654,8 @@ async function hostStartOnline() {
   const seats = h.roster.filter(Boolean);
   const names = seats.map(r => r.name);
   const colors = seats.map((r, i) => PLAYER_COLORS[i]);
-  await hostRun('beginGame', [names, colors], net.myPid);
+  const accountIds = seats.map(r => r.accountId || null);
+  await hostRun('beginGame', [names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, accountIds], net.myPid);
 }
 // Lets the host force an unresponsive (disconnected) player's turn to
 // end, so the game is not stuck waiting for someone who is gone.
@@ -3665,7 +3670,9 @@ function hostSkipDisconnected() {
 function joinState() { if (!net.join) net.join = { peer: null, conn: null, hostId: '', name: '', status: '', error: '', reconnecting: false }; return net.join; }
 function joinStart(hostId, name) {
   const j = joinState();
+  if (!accountUser) { j.error = 'Sign in to join an online game.'; renderSetup(); return; }
   j.hostId = slugify(hostId); j.name = (name || '').trim().slice(0, 14) || 'Player';
+  j.name = accountUser.username;
   net.myName = j.name;
   if (!j.hostId) { j.error = 'Enter the host\'s lobby name.'; renderSetup(); return; }
   j.error = ''; j.status = 'Connecting...'; renderSetup();
@@ -3689,7 +3696,7 @@ function joinConnect() {
     j.status = j.reconnecting ? 'Reconnected. Catching up...' : 'Connected. Joining...';
     j.error = ''; j.reconnecting = false;
     net.role = 'guest';
-    try { conn.send({ t: 'hello', name: j.name, clientId: myClientId() }); } catch (e) {}
+    try { conn.send({ t: 'hello', name: j.name, accountId: accountUser?.id, avatarUrl: accountUser?.avatar_url, clientId: myClientId() }); } catch (e) {}
     renderSetup();
   });
   conn.on('data', data => joinHandleData(data));
@@ -3744,9 +3751,16 @@ let connStatus = {};   // pid -> connected, kept up to date from the host
 // keeps them live.
 function applySyncSnapshot(msg) {
   connStatus = msg.connFlags || {};
-  game = msg.game; busy = msg.busy; popup = msg.popup; ui.intro = msg.uiIntro; ui.notice = msg.uiNotice || '';
+  game = adoptPeerSnapshot(msg.game); busy = msg.busy; popup = msg.popup; ui.intro = msg.uiIntro; ui.notice = msg.uiNotice || '';
   attachGame();
   mpTrace('apply', 'sync', { rev: game.rev || 0 });
+}
+function adoptPeerSnapshot(snapshot) {
+  const restored = MonopolyGameEngine.deserializeState(snapshot);
+  const sync = window.authoritativeGame;
+  return isBackendAuthoritativeGame() && sync && sync.preserveAuthoritativeTurnState
+    ? sync.preserveAuthoritativeTurnState(restored)
+    : restored;
 }
 // 'run' and 'final' messages (see hostRun) arrive on the same ordered
 // data channel, in the order the host sent them, so queuing them
@@ -3767,6 +3781,10 @@ async function pumpReplay() {
 }
 async function guestReplay(msg) {
   if (msg.t === 'run') {
+    if (isBackendAuthoritativeGame() && msg.name === 'rollDice') {
+      mpTrace('apply', 'run-ignored', { name: msg.name, seq: msg.seq, reason: 'backend-authoritative roll' });
+      return;
+    }
     // Actually run the action for real, right now -- this is what lets
     // a guest's dice, camera and piece start moving at (almost) the
     // same moment as the host's, instead of only finding out once the
@@ -3791,7 +3809,7 @@ async function guestReplay(msg) {
     const mine = game && game.turnOrder && cur().id === net.myPid;
     const keepTrade = mine && game.trade && ['pick', 'edit'].includes(game.trade.stage) ? game.trade : null;
     const wasNull = !game;
-    game = msg.game; busy = msg.busy; popup = msg.popup; ui.intro = msg.uiIntro; ui.notice = msg.uiNotice || '';
+    game = adoptPeerSnapshot(msg.game); busy = msg.busy; popup = msg.popup; ui.intro = msg.uiIntro; ui.notice = msg.uiNotice || '';
     if (keepTrade) game.trade = keepTrade;
     if (wasNull) attachGame(); else render();
     mpTrace('apply', 'final-done', { seq: msg.seq, rev: game.rev || 0 });
@@ -3841,6 +3859,10 @@ function hostOwnershipOK(name, pid) {
 let hostActionInFlight = false;
 async function hostRun(name, args, pid, extra) {
   if (net.role === 'guest') return;   // a guest never runs game logic locally
+  if (isBackendAuthoritativeGame() && name === 'rollDice') {
+    mpTrace('in', 'act-dropped', { name, pid, reason: 'backend-authoritative roll' });
+    return;
+  }
   if (!hostOwnershipOK(name, pid)) return;
   // While the host has the game paused, freeze every gameplay action --
   // including timers ticking forward -- except the unpause itself.
@@ -3895,6 +3917,12 @@ async function hostRun(name, args, pid, extra) {
 // game logic). If this browser is a guest, it is sent to the host
 // instead, and the resulting replay is what actually plays it out here.
 function act(name, ...args) {
+  if (isBackendAuthoritativeGame()) {
+    if (name === 'rollDice') return rollDice();
+    if (name === 'closeCard') { closeCard(args[0]); return; }
+    const action = authoritativeActionSpec(name, args);
+    if (action) return submitAuthoritativeGameplayAction(name, action);
+  }
   const pid = net.role === 'guest' ? net.myPid : (net.role === 'host' ? net.myPid : (game ? expectedActorId(name) : 0));
   if (net.role === 'guest') { netSendToHost({ t: 'act', name, args, pid }); return; }
   hostRun(name, args, pid);
@@ -3920,11 +3948,16 @@ function netTeardown() {
 function hostRosterHTML() {
   const h = hostState();
   return h.roster.filter(Boolean).map(r => `
-    <div class="row"><span class="dot" style="background:${PLAYER_COLORS[r.pid]}"></span>
-      <span>${esc(r.name)}${r.pid === 0 ? ' (you, the host)' : ''}</span>
-      <span class="tag">${r.connected ? 'connected' : 'not connected'}</span></div>`).join('') || '<p class="muted">Nobody has joined yet.</p>';
+    <div class="social-row">${socialAvatar({ username: r.name, avatar_url: r.avatarUrl })}
+      <span class="social-name">${esc(r.name)}${r.pid === 0 ? ' (host)' : ''}</span>
+      <span class="tag">Player ${r.pid + 1}</span><span class="tag">${r.connected ? 'connected' : 'not connected'}</span></div>`).join('') || '<p class="muted">Nobody has joined yet.</p>';
 }
 function renderHostSetup() {
+  if (!accountUser) {
+    $('app').innerHTML = `<div class="setup"><div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
+      <p class="sub">Sign in to host</p>${accountPanelHTML()}<button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>`;
+    return;
+  }
   if (!HAS_PEER) {
     $('app').innerHTML = `<div class="setup"><div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
       <div class="panel"><h2>Online play is unavailable</h2>
@@ -3934,19 +3967,50 @@ function renderHostSetup() {
   }
   const h = hostState();
   if (!h.peer && !h.status) hostOpenLobby(h.lobbyId || hostSuggestLobbyId());
+  const serverLobbyPanel = backendLobby && backendLobby.gameId ? `
+    <div class="panel acc-blue">
+      <h2>Server lobby</h2>
+      <p class="muted">${esc(backendLobby.gameId)}</p>
+      <div class="row">
+        <button class="btn" onclick="backendRefreshLobby('${esc(backendLobby.gameId)}')">Refresh</button>
+        <button class="btn alt" onclick="backendLeaveGame('${esc(backendLobby.gameId)}')">Leave lobby</button>
+      </div>
+      ${backendLobbyPlayersHTML(backendLobby.players, 'Server roster')}
+      ${backendLobby.canStart ? `<button class="btn" onclick="backendStartGame('${esc(backendLobby.gameId)}')">Start server lobby</button>` : ''}
+    </div>` : `
+    <div class="panel acc-blue">
+      <h2>Server lobby</h2>
+      <p class="muted">The server keeps the authoritative lobby membership for signed-in players.</p>
+      <button class="btn" onclick="backendCreateGame()">Create server lobby</button>
+    </div>`;
+  const serverGamesPanel = accountUser ? `
+    <div class="panel acc-yellow">
+      <h2>My server games</h2>
+      ${backendMyGames.length ? backendMyGames.map(game => `
+        <div class="social-row" style="margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <span class="social-name">${esc(game.gameId || game.id || 'Game')}</span>
+          <span class="tag">${esc(game.status || 'WAITING')}</span>
+          <button class="btn alt" onclick="backendJoinGame('${esc(game.gameId || game.id)}')">Join</button>
+          <button class="btn alt" onclick="backendRefreshLobby('${esc(game.gameId || game.id)}')">Load</button>
+        </div>`).join('') : '<p class="muted">No server games yet.</p>'}
+    </div>` : '';
   $('app').innerHTML = `
     <div class="setup">
       <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
       <p class="sub">Host an online game</p>
       <div class="panel acc-blue">
-        <label class="muted" for="hostNameInput">Your name</label>
-        <input type="text" id="hostNameInput" maxlength="14" value="${esc(net.myName || 'Host')}" oninput="hostSetName(this.value)">
+        <label class="muted" for="hostNameInput">Account</label>
+        <input type="text" id="hostNameInput" value="${esc(accountUser.username)}" readonly>
         <label class="muted" for="lobbyIdInput" style="margin-top:8px">Lobby name (tell your friends this)</label>
         <div class="row"><input type="text" id="lobbyIdInput" value="${esc(h.lobbyId)}" style="flex:1;min-width:160px">
           <button class="btn alt" onclick="hostOpenLobby(document.getElementById('lobbyIdInput').value)">Use this name</button></div>
         ${h.error ? `<p class="error">${esc(h.error)}</p>` : ''}
         ${h.status ? `<p class="muted">${esc(h.status)}</p>` : ''}
       </div>
+      ${serverLobbyPanel}
+      ${serverGamesPanel}
+      <div class="panel acc-yellow"><h2>Board</h2><p class="muted">${esc(selectedHostBoard ? selectedHostBoard.name : 'Classic board')}</p>
+        <button class="btn alt" type="button" onclick="openBoardsScreen(true)">Choose board</button></div>
       <div class="panel acc-orange"><h2>🧑‍🤝‍🧑 Players</h2><div id="hostRosterPanel">${hostRosterHTML()}</div></div>
       <div class="panel acc-red">
         <button class="btn" ${hostRosterReady() && !h.starting ? '' : 'disabled'} onclick="hostStartOnline()">${h.starting ? 'Starting...' : 'Start game'}</button>
@@ -3956,6 +4020,11 @@ function renderHostSetup() {
     </div>`;
 }
 function renderJoinSetup() {
+  if (!accountUser) {
+    $('app').innerHTML = `<div class="setup"><div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
+      <p class="sub">Sign in to join</p>${accountPanelHTML()}<button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>`;
+    return;
+  }
   if (!HAS_PEER) {
     $('app').innerHTML = `<div class="setup"><div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
       <div class="panel"><h2>Online play is unavailable</h2>
@@ -3964,33 +4033,50 @@ function renderJoinSetup() {
     return;
   }
   const j = joinState();
+  const serverJoinPanel = accountUser ? `
+    <div class="panel acc-blue">
+      <h2>Server lobby join</h2>
+      ${backendMyGames.length ? backendMyGames.map(game => `
+        <div class="social-row" style="margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <span class="social-name">${esc(game.gameId || game.id || 'Game')}</span>
+          <span class="tag">${esc(game.status || 'WAITING')}</span>
+          <button class="btn alt" onclick="backendJoinGame('${esc(game.gameId || game.id)}')">Join</button>
+          <button class="btn alt" onclick="backendRefreshLobby('${esc(game.gameId || game.id)}')">Load</button>
+        </div>`).join('') : '<p class="muted">You are not in any server games yet.</p>'}
+    </div>` : '';
   $('app').innerHTML = `
     <div class="setup">
       <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
       <p class="sub">Join an online game</p>
       <div class="panel acc-blue">
-        <label class="muted" for="joinNameInput">Your name</label>
-        <input type="text" id="joinNameInput" maxlength="14" value="${esc(j.name)}">
+        <label class="muted" for="joinNameInput">Account</label>
+        <input type="text" id="joinNameInput" value="${esc(accountUser.username)}" readonly>
         <label class="muted" for="joinHostInput" style="margin-top:8px">Host's lobby name</label>
         <input type="text" id="joinHostInput" value="${esc(j.hostId)}" placeholder="e.g. alex-1234">
         <button class="btn" style="width:100%;margin-top:10px" onclick="joinStart(document.getElementById('joinHostInput').value, document.getElementById('joinNameInput').value)">Join</button>
         ${j.error ? `<p class="error">${esc(j.error)}</p>` : ''}
         ${j.status ? `<p class="muted">${esc(j.status)}</p>` : ''}
       </div>
+      ${serverJoinPanel}
+      ${backendLobby && backendLobby.gameId ? backendLobbyPlayersHTML(backendLobby.players, 'Server lobby roster') : ''}
       ${j.roster ? `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 Players</h2>${j.roster.map(s => `
-        <div class="row"><span class="dot" style="background:${PLAYER_COLORS[s.pid]}"></span><span>${esc(s.name)}</span>
-        <span class="tag">${s.connected ? 'connected' : 'not connected'}</span></div>`).join('')}
+        <div class="social-row">${socialAvatar({ username: s.name, avatar_url: s.avatarUrl })}<span class="social-name">${esc(s.name)}</span>
+        <span class="tag">Player ${s.pid + 1}</span><span class="tag">${s.connected ? 'connected' : 'not connected'}</span></div>`).join('')}
         <p class="muted">Waiting for the host to start the game...</p></div>` : ''}
       <div class="panel acc-red"><button class="btn alt" onclick="netTeardown(); setup.screen=''; renderSetup();">Back</button></div>
     </div>`;
 }
 
-function setCount(n) { setup.count = n; renderSetup(); }
+function setCount(n) {
+  setup.count = n;
+  queueAccountSettings({ gamePreferences: { playerCount: n } });
+  renderSetup();
+}
 function setName(i, v) { setup.names[i] = v; }   // no redraw so typing is not interrupted
 async function startGame() {
   const names = setup.names.slice(0, setup.count).map((n, i) => n.trim() || `Player ${i + 1}`);
   const colors = names.map((n, i) => PLAYER_COLORS[i]);
-  await beginGame(names, colors);
+  await beginGame(names, colors, selectedHostBoard ? selectedHostBoard.property_names : {});
 }
 // Shared by local play and online play: players keep their seat (id 0..n-1)
 // in the order given; turnOrder is a random shuffle of who goes first.
@@ -3998,14 +4084,15 @@ async function startGame() {
 // function, shuffle and reveal animation included, can be replayed
 // identically on every guest's screen; see the online randomness shim
 // near the top of the script and hostRun/guestReplay in SECTION 15.
-async function beginGame(names, colors) {
+async function beginGame(names, colors, boardNames = {}, accountIds = []) {
   const order = names.map((n, i) => i);
   for (let i = order.length - 1; i > 0; i--) {            // shuffle: this is the new turn order
     const j = Math.floor(await rnd() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
-  newGame(names, colors);          // players stay in their given seats
-  game.turnOrder = order;          // who goes first is random
+  newGame(names, colors, boardNames, accountIds); // players stay in their given seats
+  if (!applyGameAction({ type: 'SET_TURN_ORDER', order })) throw new Error('The starting turn order is invalid.');
+  log(`Game started. ${cur().name} goes first.`);
   attachGame();
   await orderIntro(order, names, colors);
 }
@@ -4015,6 +4102,602 @@ function restart() {
   game = null; busy = false; popup = null;
   try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
   renderSetup();
+}
+
+const DEFAULT_ACCOUNT_SETTINGS = {
+  musicVolume: 35,
+  soundEffectsVolume: 100,
+  interfacePreferences: { soundEnabled: true },
+  cameraPreferences: { follow: true, tilt: true },
+  gamePreferences: { playerCount: 2 },
+  other: {},
+};
+let accountUser = null;
+let accountSettings = {};
+let accountMode = 'signin';
+let accountBusy = false;
+let accountMessage = 'Checking account session...';
+let accountSaveTimer = null;
+let accountSaveInFlight = false;
+let pendingAccountSettings = {};
+
+if (window.authoritativeGame) {
+  window.authoritativeGame.subscribe(async snapshot => {
+    if (!snapshot || !snapshot.gameId || !snapshot.state || snapshot.status !== 'ACTIVE') {
+      if (!snapshot || !snapshot.gameId) authoritativeAppliedGameId = null;
+      return;
+    }
+
+    const isNewGame = authoritativeAppliedGameId !== snapshot.gameId || !$('board');
+    game = MonopolyGameEngine.deserializeState(snapshot.state);
+    game.rev = snapshot.version;
+    authoritativeAppliedGameId = snapshot.gameId;
+    if (authoritativeRollRequest && !authoritativeRollInFlight && snapshot.version > authoritativeRollRequest.expectedVersion) {
+      authoritativeRollRequest = null;
+    }
+    if (isNewGame) attachGame();
+    else render();
+
+    const roll = snapshot.events.find(event => event.type === 'DICE_ROLLED');
+    const eventKey = `${snapshot.gameId}:${snapshot.version}`;
+    if (!roll || eventKey === lastAuthoritativeDiceEvent) return;
+    lastAuthoritativeDiceEvent = eventKey;
+    const wasBusy = busy;
+    if (!wasBusy) busy = true;
+    render();
+    beginMovementCamera();
+    moveCameraReset(T(400));
+    await animateDice(roll.dice[0], roll.dice[1]);
+    const player = game.players[roll.playerId];
+    if (player) log(`${player.name} rolled ${roll.dice[0]} + ${roll.dice[1]}${roll.isDouble ? ' (doubles)' : ''}.`);
+    await presentAuthoritativeTurnEvents(snapshot.events, roll.playerId);
+    if (!wasBusy) {
+      busy = false;
+      finishMovementCamera(T(600));
+      render();
+    }
+  });
+}
+
+async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
+  const moves = events.filter(event => event.type === 'PLAYER_MOVED');
+  if (moves.length) {
+    moveCameraFocus(tokenPos[rollingPlayerId] ?? moves[0].from, T(400), 'follow');
+    await sleep(T(200));
+  }
+  const stepDuration = stepTime(moves.length || 1);
+  const landingTypes = new Set([
+    'PROPERTY_AVAILABLE', 'NO_RENT_MORTGAGED', 'RENT_DUE', 'LANDING_OWN_PROPERTY',
+    'TAX_DUE', 'LANDING_GO_TO_JAIL', 'LANDING_NO_EFFECT', 'CARD_DRAW_REQUESTED',
+  ]);
+  let landingLogged = false;
+
+  for (const event of events) {
+    if (event.type === 'PLAYER_MOVED') {
+      const player = game.players[event.playerId];
+      if (!player) continue;
+      if (tokenPos[player.id] !== event.from) tokenPos[player.id] = event.from;
+      $('tokens').style.setProperty('--step', stepDuration + 'ms');
+      tokenPos[player.id] = event.to;
+      updateTokens();
+      hop(player.id, stepDuration);
+      sfx.step();
+      moveCameraFocus(event.to, stepDuration, 'follow');
+      await sleep(stepDuration);
+    } else if (event.type === 'GO_SALARY_COLLECTED') {
+      const player = game.players[event.playerId];
+      if (player) log(`${player.name} passes GO and collects ${fmt(event.amount)}.`);
+      render();
+    } else if (landingTypes.has(event.type)) {
+      const player = game.players[event.playerId];
+      const position = event.position == null ? player && player.pos : event.position;
+      if (!landingLogged && player && position != null) {
+        log(`${player.name} lands on ${spaceLabel(position)}.`);
+        landingLogged = true;
+        render();
+        await sleep(T(300));
+      }
+      if (event.type === 'PROPERTY_AVAILABLE') log(`${spaceLabel(event.position)} is for sale at ${fmt(event.amount)}.`);
+      else if (event.type === 'NO_RENT_MORTGAGED') log(`${spaceLabel(event.position)} is mortgaged. No rent.`);
+      else if (event.type === 'RENT_DUE') {
+        const owner = game.players[event.ownerId];
+        if (player && owner) log(`${player.name} owes ${owner.name} ${fmt(event.amount)} rent.`);
+      } else if (event.type === 'LANDING_OWN_PROPERTY' && player) log(`${player.name} owns this one already.`);
+      else if (event.type === 'TAX_DUE' && player) log(`${player.name} pays ${fmt(event.amount)} in tax.`);
+      else if (event.type === 'LANDING_GO_TO_JAIL' && player) log(`${player.name} goes to jail.`);
+    } else if (event.type === 'THREE_DOUBLES_JAIL') {
+      const player = game.players[event.playerId];
+      if (player) log(`Three doubles in a row. ${player.name} goes to jail.`);
+      await animateJail(event.playerId);
+    } else if (event.type === 'PLAYER_JAILED') {
+      await animateJail(event.playerId);
+    } else if (event.type === 'JAIL_RELEASED') {
+      const player = game.players[event.playerId];
+      if (player) log(`${player.name} rolled doubles and leaves jail.`);
+    } else if (event.type === 'JAIL_ROLL_FAILED') {
+      const player = game.players[event.playerId];
+      if (player) log(`No doubles. ${player.name} stays in jail.`);
+    } else if (event.type === 'JAIL_FINE_DUE') {
+      const player = game.players[event.playerId];
+      if (player) log(`${player.name} pays ${fmt(event.amount)} after 3 tries.`);
+    } else if (event.type === 'DOUBLES_AGAIN') {
+      log('Doubles. Roll again.');
+    } else if (event.type === 'TURN_CHANGED') {
+      const nextPlayer = game.players[event.playerId];
+      if (nextPlayer) log(`${nextPlayer.name}'s turn.`);
+    }
+  }
+
+  presentPaymentEvents(events);
+  render();
+}
+
+async function accountRequest(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    ...options,
+    headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Account request failed (${response.status}).`);
+  return result;
+}
+
+let backendLobby = null;
+let backendMyGames = [];
+
+function stopBackendLobbyPolling() {
+  if (backendLobbyPollId) clearInterval(backendLobbyPollId);
+  backendLobbyPollId = null;
+  backendLobbyPollInFlight = false;
+}
+
+function startBackendLobbyPolling(gameId) {
+  if (!gameId) return;
+  if (backendLobbyPollId && backendLobby && backendLobby.gameId === gameId) return;
+  stopBackendLobbyPolling();
+  backendLobbyPollId = setInterval(() => {
+    if (document.visibilityState === 'hidden' || backendLobbyPollInFlight || !backendLobby || backendLobby.gameId !== gameId) return;
+    backendRefreshLobby(gameId, { fromPoll: true });
+  }, 4000);
+}
+
+async function activateBackendGame(payload) {
+  stopBackendLobbyPolling();
+  if (window.authoritativeGame) {
+    await window.authoritativeGame.setAuthoritativeState(payload);
+    window.authoritativeGame.startPolling(payload.gameId);
+  }
+}
+
+async function backendGameRequest(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    ...options,
+    headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) },
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error?.message || result.error || `Server lobby request failed (${response.status}).`);
+  return result;
+}
+
+async function refreshBackendMyGames() {
+  if (!accountUser) {
+    backendMyGames = [];
+    return;
+  }
+  try {
+    const result = await backendGameRequest('/api/game/my-games');
+    backendMyGames = Array.isArray(result.games) ? result.games : [];
+  } catch (error) {
+    backendMyGames = [];
+    console.warn('Could not refresh backend games:', error);
+  }
+}
+
+async function backendCreateGame() {
+  if (!accountUser) {
+    setAccountStatus('Sign in to create a server lobby.');
+    return;
+  }
+  try {
+    const result = await backendGameRequest('/api/game/create', {
+      method: 'POST',
+      body: JSON.stringify({ selectedBoardId: selectedHostBoard ? selectedHostBoard.id : null }),
+    });
+    backendLobby = {
+      gameId: result.gameId,
+      game: result.game || null,
+      players: Array.isArray(result.players) ? result.players : [],
+      canStart: !!result.canStart,
+    };
+    startBackendLobbyPolling(result.gameId);
+    await refreshBackendMyGames();
+    renderSetup();
+  } catch (error) {
+    setAccountStatus(error.message);
+  }
+}
+
+async function backendJoinGame(gameId) {
+  if (!gameId) return;
+  try {
+    const result = await backendGameRequest('/api/game/join', {
+      method: 'POST',
+      body: JSON.stringify({ gameId }),
+    });
+    backendLobby = {
+      gameId: result.gameId,
+      game: result.game || null,
+      players: Array.isArray(result.players) ? result.players : [],
+      canStart: false,
+    };
+    startBackendLobbyPolling(result.gameId);
+    await refreshBackendMyGames();
+    renderSetup();
+  } catch (error) {
+    setAccountStatus(error.message);
+  }
+}
+
+async function backendRefreshLobby(gameId, options = {}) {
+  if (!gameId || backendLobbyPollInFlight) return;
+  backendLobbyPollInFlight = true;
+  try {
+    const result = await backendGameRequest(`/api/game/lobby?gameId=${encodeURIComponent(gameId)}`);
+    backendLobby = {
+      gameId: result.gameId,
+      game: result.game || null,
+      players: Array.isArray(result.players) ? result.players : [],
+      canStart: !!result.canStart,
+    };
+    const status = result.status || result.game?.status;
+    if (status === 'ACTIVE') {
+      stopBackendLobbyPolling();
+      if (window.authoritativeGame.gameId && window.authoritativeGame.gameId !== result.gameId) {
+        await window.authoritativeGame.clearAuthoritativeState();
+      }
+      const state = await window.authoritativeGame.fetchLatest(result.gameId);
+      if (state) window.authoritativeGame.startPolling(result.gameId);
+      return;
+    }
+    renderSetup();
+  } catch (error) {
+    if (!options.fromPoll) setAccountStatus(error.message);
+  } finally {
+    if (options.fromPoll) backendLobbyPollInFlight = false;
+    else if (backendLobbyPollId) backendLobbyPollInFlight = false;
+  }
+}
+
+async function backendLeaveGame(gameId) {
+  if (!gameId) return;
+  try {
+    await backendGameRequest('/api/game/leave', {
+      method: 'POST',
+      body: JSON.stringify({ gameId }),
+    });
+    stopBackendLobbyPolling();
+    if (window.authoritativeGame && window.authoritativeGame.gameId === gameId) {
+      await window.authoritativeGame.clearAuthoritativeState();
+      authoritativeAppliedGameId = null;
+      game = null;
+      stopGameTick();
+    }
+    if (backendLobby && backendLobby.gameId === gameId) backendLobby = null;
+    await refreshBackendMyGames();
+    renderSetup();
+  } catch (error) {
+    setAccountStatus(error.message);
+  }
+}
+
+async function backendStartGame(gameId) {
+  if (!gameId) return;
+  try {
+    const result = await backendGameRequest('/api/game/start', {
+      method: 'POST',
+      body: JSON.stringify({ gameId }),
+    });
+    backendLobby = {
+      gameId: result.gameId,
+      game: result.game || null,
+      players: Array.isArray(result.players) ? result.players : [],
+      canStart: false,
+    };
+    if (window.authoritativeGame) {
+      await activateBackendGame({
+        gameId: result.gameId,
+        version: result.version || 1,
+        status: result.status || 'ACTIVE',
+        state: result.state || null,
+        events: [],
+      });
+    }
+    await refreshBackendMyGames();
+  } catch (error) {
+    setAccountStatus(error.message);
+  }
+}
+
+function backendLobbyPlayersHTML(players = [], title = 'Players') {
+  if (!players.length) return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2><p class="muted">No one has joined this server lobby yet.</p></div>`;
+  const rows = players.map(p => {
+    const name = p.username || p.name || 'Player';
+    const seat = Number(p.seatIndex ?? p.seat_index ?? 0) + 1;
+    const avatar = p.avatarUrl || p.avatar_url;
+    return `<div class="social-row">${socialAvatar({ username: name, avatar_url: avatar })}<span class="social-name">${esc(name)}</span><span class="tag">Seat ${seat}</span></div>`;
+  }).join('');
+  return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2>${rows}</div>`;
+}
+
+function setAccountStatus(message) {
+  accountMessage = message;
+  const status = $('accountStatus');
+  if (status) status.textContent = message;
+}
+
+function applyAccountSettings(settings = {}) {
+  accountSettings = {
+    ...DEFAULT_ACCOUNT_SETTINGS,
+    ...settings,
+    interfacePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.interfacePreferences, ...(settings.interfacePreferences || {}) },
+    cameraPreferences: { ...DEFAULT_ACCOUNT_SETTINGS.cameraPreferences, ...(settings.cameraPreferences || {}) },
+    gamePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.gamePreferences, ...(settings.gamePreferences || {}) },
+    other: settings.other || {},
+  };
+  if ([2, 3, 4].includes(accountSettings.gamePreferences.playerCount)) {
+    setup.count = accountSettings.gamePreferences.playerCount;
+  }
+  musicVolume = Math.max(0, Math.min(100, Number(accountSettings.musicVolume))) / 100;
+  soundEffectsVolume = Math.max(0, Math.min(100, Number(accountSettings.soundEffectsVolume))) / 100;
+  soundOn = accountSettings.interfacePreferences.soundEnabled !== false;
+  cameraOn = accountSettings.cameraPreferences.follow !== false;
+  tiltOn = accountSettings.cameraPreferences.tilt !== false;
+  if (bgMusic) bgMusic.volume = musicVolume * MAX_MUSIC_VOLUME;
+  try { localStorage.removeItem('monopolyMusicVolume'); } catch (e) {}
+  applySoundEffectsVolume();
+  updateTopButtons();
+  const scene = $('scene');
+  if (scene) scene.classList.toggle('tilt', tiltOn), scene.classList.toggle('flat', !tiltOn);
+  if (!cameraOn) cameraReset(0);
+  const musicSlider = $('volSlider');
+  if (musicSlider) musicSlider.value = Math.round(musicVolume * 100);
+}
+
+function queueAccountSettings(changes) {
+  if (!accountUser) return;
+  const merged = { ...changes };
+  for (const key of ['interfacePreferences', 'cameraPreferences', 'gamePreferences', 'other']) {
+    if (changes[key]) merged[key] = { ...(accountSettings[key] || {}), ...changes[key] };
+  }
+  accountSettings = { ...accountSettings, ...merged };
+  pendingAccountSettings = { ...pendingAccountSettings, ...merged };
+  for (const key of ['interfacePreferences', 'cameraPreferences', 'gamePreferences', 'other']) {
+    if (pendingAccountSettings[key]) pendingAccountSettings[key] = { ...(accountSettings[key] || {}), ...pendingAccountSettings[key] };
+  }
+  setAccountStatus('Saving account settings...');
+  clearTimeout(accountSaveTimer);
+  accountSaveTimer = setTimeout(saveAccountSettings, 500);
+}
+
+async function saveAccountSettings() {
+  if (!accountUser || accountSaveInFlight || !Object.keys(pendingAccountSettings).length) return;
+  const changes = pendingAccountSettings;
+  pendingAccountSettings = {};
+  accountSaveInFlight = true;
+  let saved = false;
+  try {
+    const result = await accountRequest('/api/settings', {
+      method: 'PATCH', body: JSON.stringify({ settings: changes }),
+    });
+    accountSettings = { ...accountSettings, ...result.settings };
+    saved = true;
+    setAccountStatus('Settings synced to your account.');
+  } catch (error) {
+    pendingAccountSettings = { ...changes, ...pendingAccountSettings };
+    setAccountStatus(`Not synced: ${error.message}`);
+  } finally {
+    accountSaveInFlight = false;
+    if (saved && Object.keys(pendingAccountSettings).length && accountUser) {
+      clearTimeout(accountSaveTimer);
+      accountSaveTimer = setTimeout(saveAccountSettings, 500);
+    }
+  }
+}
+
+function setAccountSound(enabled) {
+  soundOn = enabled;
+  updateTopButtons();
+  if (soundOn) startBgMusic(); else if (bgMusic) bgMusic.pause();
+  queueAccountSettings({ interfacePreferences: { soundEnabled: soundOn } });
+}
+
+function setAccountCamera(key, enabled) {
+  if (key === 'follow') cameraOn = enabled;
+  if (key === 'tilt') tiltOn = enabled;
+  const scene = $('scene');
+  if (scene) scene.classList.toggle('tilt', tiltOn), scene.classList.toggle('flat', !tiltOn);
+  if (!cameraOn) cameraReset(0);
+  updateTopButtons();
+  queueAccountSettings({ cameraPreferences: { follow: cameraOn, tilt: tiltOn } });
+}
+
+function accountPanelHTML() {
+  if (!accountUser) return `<div class="panel acc-blue account-panel">
+    <h2>👤 Account</h2>
+    <p class="muted">Sign in to sync your profile and game preferences across devices.</p>
+    <div class="seg">
+      <button class="btn ${accountMode === 'signin' ? '' : 'alt'}" type="button" onclick="setAccountMode('signin')">Sign in</button>
+      <button class="btn ${accountMode === 'signup' ? '' : 'alt'}" type="button" onclick="setAccountMode('signup')">Sign up</button>
+    </div>
+    <form class="account-fields" onsubmit="submitAccountAuth(event)">
+      <label class="muted" for="accountUsername">Username</label>
+      <input id="accountUsername" name="username" type="text" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" autocomplete="username" required>
+      <label class="muted" for="accountPassword">Password</label>
+      <input id="accountPassword" name="password" type="password" minlength="10" maxlength="72" autocomplete="${accountMode === 'signup' ? 'new-password' : 'current-password'}" required>
+      <button class="btn" type="submit" ${accountBusy ? 'disabled' : ''}>${accountBusy ? 'Working...' : accountMode === 'signup' ? 'Create account' : 'Sign in'}</button>
+    </form>
+    <p class="account-status" id="accountStatus" role="status">${esc(accountMessage)}</p>
+  </div>`;
+
+  const settings = {
+    ...DEFAULT_ACCOUNT_SETTINGS,
+    ...accountSettings,
+    interfacePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.interfacePreferences, ...(accountSettings.interfacePreferences || {}) },
+    cameraPreferences: { ...DEFAULT_ACCOUNT_SETTINGS.cameraPreferences, ...(accountSettings.cameraPreferences || {}) },
+    gamePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.gamePreferences, ...(accountSettings.gamePreferences || {}) },
+  };
+  const avatar = accountUser.avatar_url
+    ? `<img class="account-avatar" src="${esc(accountUser.avatar_url)}" alt="${esc(accountUser.username)} profile picture">`
+    : `<span class="account-avatar" aria-hidden="true" style="display:grid;place-items:center;font-weight:800">${esc(accountUser.username.slice(0, 1).toUpperCase())}</span>`;
+  return `<div class="panel acc-green account-panel">
+    <h2>👤 Account</h2>
+    <div class="account-row">${avatar}<strong>${esc(accountUser.username)}</strong>
+      <button class="btn alt" type="button" onclick="signOutAccount()" ${accountBusy ? 'disabled' : ''}>Sign out</button>
+    </div>
+    <form class="account-fields" onsubmit="changeAccountUsername(event)">
+      <label class="muted" for="newAccountUsername">Change username</label>
+      <div class="account-row"><input id="newAccountUsername" name="username" type="text" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" value="${esc(accountUser.username)}" required>
+        <button class="btn alt" type="submit" ${accountBusy ? 'disabled' : ''}>Update</button></div>
+    </form>
+    <div class="account-actions">
+      <label class="btn alt" for="accountAvatarFile">Choose picture</label>
+      <input id="accountAvatarFile" type="file" accept="image/jpeg,image/png,image/webp" hidden onchange="uploadAccountAvatar(this.files[0])">
+      ${accountUser.avatar_url ? '<button class="btn alt" type="button" onclick="removeAccountAvatar()">Remove picture</button>' : ''}
+    </div>
+    <form class="account-fields" onsubmit="changeAccountPassword(event)">
+      <label class="muted" for="currentAccountPassword">Change password</label>
+      <input id="currentAccountPassword" name="currentPassword" type="password" autocomplete="current-password" placeholder="Current password" required>
+      <input name="newPassword" type="password" minlength="10" maxlength="72" autocomplete="new-password" placeholder="New password (10-72 bytes)" required>
+      <button class="btn alt" type="submit" ${accountBusy ? 'disabled' : ''}>Update password</button>
+    </form>
+    <div class="account-preferences">
+      <label for="accountMusicVolume">Music volume<input id="accountMusicVolume" type="range" min="0" max="100" value="${Math.round(Number(settings.musicVolume))}" oninput="setMusicVolume(this.value)"></label>
+      <label for="accountSfxVolume">Effects volume<input id="accountSfxVolume" type="range" min="0" max="100" value="${Math.round(Number(settings.soundEffectsVolume))}" oninput="setSoundEffectsVolume(this.value)"></label>
+      <label for="accountSoundEnabled">Game sounds<input id="accountSoundEnabled" type="checkbox" ${settings.interfacePreferences.soundEnabled ? 'checked' : ''} onchange="setAccountSound(this.checked)"></label>
+      <label for="accountCameraFollow">Camera follow<input id="accountCameraFollow" type="checkbox" ${settings.cameraPreferences.follow ? 'checked' : ''} onchange="setAccountCamera('follow', this.checked)"></label>
+      <label for="accountCameraTilt">3D board view<input id="accountCameraTilt" type="checkbox" ${settings.cameraPreferences.tilt ? 'checked' : ''} onchange="setAccountCamera('tilt', this.checked)"></label>
+    </div>
+    <p class="account-status" id="accountStatus" role="status">${esc(accountMessage)}</p>
+  </div>`;
+}
+
+function setAccountMode(mode) {
+  accountMode = mode;
+  renderSetup();
+}
+
+async function restoreAccountSession() {
+  try {
+    const result = await accountRequest('/api/auth/session');
+    accountUser = result.user;
+    accountMessage = accountUser ? 'Account session restored.' : 'Sign in to sync your settings.';
+if (accountUser) {
+      applyAccountSettings(accountUser.settings || {});
+      startAccountPresence();
+      await refreshBackendMyGames();
+    } else stopAccountPresence();
+  } catch (error) {
+    accountUser = null;
+    accountMessage = `Account service unavailable: ${error.message}`;
+  }
+  renderSetup();
+}
+
+async function submitAccountAuth(event) {
+  event.preventDefault();
+  if (accountBusy) return;
+  accountBusy = true; renderSetup();
+  try {
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    const result = await accountRequest(`/api/auth/${accountMode === 'signup' ? 'signup' : 'signin'}`, {
+      method: 'POST', body: JSON.stringify(values),
+    });
+    accountUser = result.user;
+    applyAccountSettings(accountUser.settings || {});
+    startAccountPresence();
+    accountMessage = 'Signed in. Settings are stored with your account.';
+  } catch (error) {
+    accountMessage = error.message;
+  } finally {
+    accountBusy = false;
+    renderSetup();
+  }
+}
+
+async function signOutAccount() {
+  if (accountBusy) return;
+  accountBusy = true;
+  try {
+    await accountRequest('/api/auth/signout', { method: 'POST', body: '{}' });
+    accountUser = null;
+    backendLobby = null;
+    backendMyGames = [];
+    stopAccountPresence();
+    accountSettings = {};
+    pendingAccountSettings = {};
+    accountMessage = 'Signed out.';
+  } catch (error) {
+    accountMessage = error.message;
+  } finally {
+    accountBusy = false;
+    renderSetup();
+  }
+}
+
+async function changeAccountUsername(event) {
+  event.preventDefault();
+  const username = new FormData(event.currentTarget).get('username');
+  try {
+    const result = await accountRequest('/api/profile', { method: 'PATCH', body: JSON.stringify({ username }) });
+    accountUser = result.user;
+    accountMessage = 'Username updated and synced.';
+    renderSetup();
+  } catch (error) { setAccountStatus(error.message); }
+}
+
+async function changeAccountPassword(event) {
+  event.preventDefault();
+  const values = Object.fromEntries(new FormData(event.currentTarget));
+  try {
+    await accountRequest('/api/profile/password', { method: 'POST', body: JSON.stringify(values) });
+    event.currentTarget.reset();
+    setAccountStatus('Password updated.');
+  } catch (error) { setAccountStatus(error.message); }
+}
+
+async function uploadAccountAvatar(file) {
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { setAccountStatus('Profile pictures must be 2 MB or smaller.'); return; }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const result = await accountRequest('/api/profile/avatar', {
+        method: 'POST', body: JSON.stringify({ image: reader.result }),
+      });
+      accountUser = { ...accountUser, avatar_url: result.avatar_url };
+      accountMessage = 'Profile picture uploaded and synced.';
+      renderSetup();
+    } catch (error) { setAccountStatus(error.message); }
+  };
+  reader.onerror = () => setAccountStatus('Could not read that image file.');
+  reader.readAsDataURL(file);
+}
+
+async function removeAccountAvatar() {
+  try {
+    await accountRequest('/api/profile/avatar', { method: 'DELETE' });
+    accountUser = { ...accountUser, avatar_url: null };
+    accountMessage = 'Profile picture removed.';
+    renderSetup();
+  } catch (error) { setAccountStatus(error.message); }
+}
+
+function setSoundEffectsVolume(pct) {
+  soundEffectsVolume = Math.max(0, Math.min(100, +pct)) / 100;
+  applySoundEffectsVolume();
+  queueAccountSettings({ soundEffectsVolume: Math.round(soundEffectsVolume * 100) });
 }
 
 function howToPlayHTML() {
@@ -4040,6 +4723,9 @@ function howToPlayHTML() {
 function renderSetup() {
   if (setup.screen === 'host') { renderHostSetup(); return; }
   if (setup.screen === 'join') { renderJoinSetup(); return; }
+  if (setup.screen === 'friends') { renderFriendsScreen(); return; }
+  if (setup.screen === 'boards') { renderBoardsScreen(); return; }
+  if (setup.screen === 'boardEditor') { renderBoardEditorScreen(); return; }
   const saved = loadSaved();
   const inputs = Array.from({ length: setup.count }, (_, i) => `
     <label class="muted" for="n${i}">Player ${i + 1}</label>
@@ -4060,6 +4746,12 @@ function renderSetup() {
       <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
       <p class="sub">Custom Edition</p>
       ${resume}
+      ${accountPanelHTML()}
+      <div class="panel acc-yellow"><h2>Community &amp; creation</h2>
+        <div class="row"><button class="btn" type="button" onclick="openFriendsScreen()">Friends</button>
+          <button class="btn alt" type="button" onclick="openBoardsScreen(false)">Custom boards</button></div>
+        <p class="muted" style="margin-bottom:0">${esc(selectedHostBoard ? `Selected board: ${selectedHostBoard.name}` : 'Selected board: Classic board')}</p>
+      </div>
       <div class="panel acc-orange">
         <h2>🎲 Play on one screen</h2>
         <div class="muted">Pass the device around. How many players?</div>
@@ -4081,6 +4773,7 @@ function renderSetup() {
 
 // Start by showing the setup screen.
 renderSetup();
+restoreAccountSession();
 </script>
 </body>
 </html>

@@ -1,0 +1,16 @@
+{
+  "name": "monopoly-custom-edition",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "db:check": "node scripts/check-db.js",
+    "test": "node --test game-engine.test.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "@vercel/blob": "^2.0.0",
+    "bcryptjs": "^3.0.2"
+  }
+}
