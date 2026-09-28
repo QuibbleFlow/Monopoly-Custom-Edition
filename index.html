@@ -1095,6 +1095,11 @@ button.board-preview-space.selected { outline: 3px solid var(--accent); outline-
 .board-editor-controls { display: grid; gap: var(--sp2); max-width: 520px; margin: 0 auto; }
 .social-actions { display: flex; gap: var(--sp2); flex-wrap: wrap; margin-left: auto; }
 
+@media (min-width: 1100px) {
+  .hud-pills { gap: var(--sp2); }
+  .pill .avatar { width: 34px; height: 34px; font-size: 1rem; }
+  .pill .pmoney { font-size: 1.15rem; }
+}
 </style>
 </head>
 
@@ -1134,7 +1139,9 @@ const JAIL_POS = 10;             // which square number is Jail
 const MORTGAGE_INTEREST = 0.10;  // extra you pay to unmortgage (10 percent)
 const TRADE_TIMER_MS = 75 * 1000;      // the current player's trade/action window
 const VIEW_TRADE_MS = 10 * 1000;       // how long "View Trade" stays up for everyone after a trade completes
-const PLAYER_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0']; // one per player
+const MAX_ONLINE_PLAYERS = 8;
+const PLAYER_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0',
+                       '#f28c1b', '#0fa3a3', '#d6479b', '#6b4f2a']; // one per player
 const SAVE_KEY = 'monopoly-ontario-edition-save-v2';
 
 /* ANIMATION SPEED. 1 = original speed. 1.4 = a little slower (current).
@@ -2040,7 +2047,7 @@ function updateTokens() {
     const grp = groups[tokenPos[p.id]], n = grp.length, k = grp.indexOf(p);
     const c = cellCenter(tokenPos[p.id]);
     let dx = 0, dy = 0;
-    if (n > 1) { const ang = (k / n) * Math.PI * 2 - Math.PI / 2; dx = Math.cos(ang) * 1.7; dy = Math.sin(ang) * 1.7; }
+    if (n > 1) { const r = n > 4 ? 2.7 : 1.7; const ang = (k / n) * Math.PI * 2 - Math.PI / 2; dx = Math.cos(ang) * r; dy = Math.sin(ang) * r; }
     el.style.left = (c.x + dx) + '%'; el.style.top = (c.y + dy) + '%';
     el.style.opacity = (tokenPos[p.id] === hideSq) ? '0' : '1';
     el.classList.toggle('active', p.id === cur().id && !game.over);
@@ -3651,7 +3658,7 @@ function hostOpenLobby(lobbyId) {
 function hostFindSeatByClientId(cid) { return hostState().roster.find(r => r.clientId === cid); }
 function hostNextOpenPid() {
   const h = hostState();
-  for (let pid = 1; pid < 4; pid++) if (!h.roster[pid]) return pid;
+  for (let pid = 1; pid < MAX_ONLINE_PLAYERS; pid++) if (!h.roster[pid]) return pid;
   return -1;
 }
 function hostWireGuestConn(conn) {
@@ -3671,7 +3678,7 @@ function hostHandleHello(conn, data) {
   if (!seat) {
     if (game) { try { conn.send({ t: 'error', message: 'This game has already started without you.' }); } catch (e) {} return; }
     const pid = hostNextOpenPid();
-    if (pid < 0) { try { conn.send({ t: 'error', message: 'This lobby already has 4 players.' }); } catch (e) {} return; }
+    if (pid < 0) { try { conn.send({ t: 'error', message: 'This lobby already has ' + MAX_ONLINE_PLAYERS + ' players.' }); } catch (e) {} return; }
     seat = { pid, name: (data.name || `Player ${pid + 1}`).slice(0, 24), accountId: data.accountId || null, avatarUrl: data.avatarUrl || null, clientId: data.clientId, conn, connected: true };
     h.roster[pid] = seat;
   } else {

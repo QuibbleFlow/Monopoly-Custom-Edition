@@ -12,7 +12,7 @@
       names, colors = [], accountIds = [], boardNames = {}, boardSize = 40,
       startMoney = 1500,
     } = options;
-    if (!Array.isArray(names) || names.length < 2 || names.length > 4) {
+    if (!Array.isArray(names) || names.length < 2 || names.length > 8) {
       throw new Error('A game requires between two and four players.');
     }
     return {
