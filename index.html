@@ -2429,19 +2429,29 @@ function startGameTick() {
   if (gameTickInterval) return;
   gameTickInterval = setInterval(() => {
     if (!game) return;
-    // Every client, every second: just refresh the on-screen countdown
-    // text locally. Purely cosmetic -- no game-state mutation, no network
-    // traffic -- so it costs nothing and never fights with an animation.
+
+    // Countdown text is presentation-only and stays smooth on every client.
     if (!game.paused && (game.tradeTimerEnd || game.viewTrade)) updateDock();
-    // Host (or offline solo play) only: once a deadline has actually been
-    // crossed, run the real, authoritative tick -- which is what
-    // broadcasts to every guest and can end the turn or open an auction.
-    if (game.over || net.role === 'guest' || game.paused) return;
+    if (game.over || game.paused) return;
+
     const now = Date.now();
-    const timerDue = game.tradeTimerEnd && now >= game.tradeTimerEnd;
-    const viewDue = game.viewTrade && now >= game.viewTrade.expiresAt;
-    if (timerDue || viewDue) hostRun('gameTick', [now], 0);
-  }, 1000);
+    const timerDue = !!(game.tradeTimerEnd && now >= game.tradeTimerEnd);
+    const viewDue = !!(game.viewTrade && now >= game.viewTrade.expiresAt);
+    if (!timerDue && !viewDue) return;
+
+    if (isBackendAuthoritativeGame()) {
+      // Server multiplayer never falls through to the old PeerJS host path.
+      // The authenticated host asks the server to process an expired timer;
+      // the server supplies its own timestamp and re-checks the game state.
+      if (backendIsHostOfCurrentGame() && !authoritativeActionInFlight) {
+        submitAuthoritativeGameplayAction('gameTick', { type: 'GAME_TICK' });
+      }
+      return;
+    }
+
+    if (net.role === 'guest') return;
+    hostRun('gameTick', [now], 0);
+  }, 500);
 }
 function stopGameTick() { if (gameTickInterval) { clearInterval(gameTickInterval); gameTickInterval = null; } }
 
