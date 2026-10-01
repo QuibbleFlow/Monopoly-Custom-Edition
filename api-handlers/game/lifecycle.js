@@ -29,6 +29,7 @@ function serializeGameRow(row) {
   return {
     gameId: row.id || row.gameId,
     hostAccountId: row.host_account_id || row.hostAccountId,
+    name: row.name || 'Server game',
     status: row.status,
     selectedBoardId: row.selected_board_id || row.selectedBoardId || null,
     resumeSaveId: row.resume_save_id || row.resumeSaveId || null,
@@ -54,17 +55,18 @@ async function ensureBoardOwner(tx, accountId, selectedBoardId) {
   return rows[0];
 }
 
-async function createGame({ account, selectedBoardId, inviteOnly = false, db = database() }) {
+async function createGame({ account, selectedBoardId, inviteOnly = false, name = 'Server game', db = database() }) {
   if (!account || !account.id) {
     return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   }
   const gameId = randomUUID();
+  const gameName = typeof name === 'string' && name.trim() ? name.trim().slice(0, 80) : 'Server game';
 
   return db.begin(async tx => {
     await ensureBoardOwner(tx, account.id, selectedBoardId);
 
-    await tx`INSERT INTO games (id, host_account_id, status, invite_only, selected_board_id, created_at, started_at, updated_at)
-      VALUES (${gameId}, ${account.id}, ${'WAITING'}, ${!!inviteOnly}, ${selectedBoardId || null}, now(), NULL, now())`;
+    await tx`INSERT INTO games (id, host_account_id, name, status, invite_only, selected_board_id, created_at, started_at, updated_at)
+      VALUES (${gameId}, ${account.id}, ${gameName}, ${'WAITING'}, ${!!inviteOnly}, ${selectedBoardId || null}, now(), NULL, now())`;
 
     await tx`INSERT INTO game_players (game_id, account_id, seat_index, joined_at)
       VALUES (${gameId}, ${account.id}, ${0}, now())`;
@@ -461,6 +463,7 @@ async function getMyGames({ account, db = database() }) {
     return games.map(game => ({
       gameId: game.id,
       hostAccountId: game.host_account_id,
+      name: game.name || 'Server game',
       status: game.status,
       isHost: game.host_account_id === account.id,
       inviteOnly: !!game.invite_only,
