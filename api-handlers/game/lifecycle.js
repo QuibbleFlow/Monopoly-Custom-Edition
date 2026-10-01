@@ -1,4 +1,4 @@
-const { randomUUID } = require('node:crypto');
+const { randomInt, randomUUID } = require('node:crypto');
 const engine = require('../../game-engine.js');
 const boardData = require('../../game-board.js');
 const { database, noStore, parseBody, requireAccount } = require('../../lib/account');
@@ -320,8 +320,21 @@ async function startGame({ account, gameId, db = database() }) {
 
     const names = players.map(player => player.username);
     const accountIds = players.map(player => player.account_id);
-    const state = engine.createState({ names, accountIds, boardSize: boardData.spaces.length, boardNames: {} });
-    state.started = true;
+    let state = engine.createState({ names, accountIds, boardSize: boardData.spaces.length, boardNames: {} });
+
+    // Match the original game's start flow, but choose the order on the
+    // authoritative server so every browser receives the exact same result.
+    const order = players.map((_, index) => index);
+    for (let index = order.length - 1; index > 0; index--) {
+      const swapIndex = randomInt(index + 1);
+      [order[index], order[swapIndex]] = [order[swapIndex], order[index]];
+    }
+    const orderResult = engine.applyAction(state, { type: 'SET_TURN_ORDER', order }, { spaces: boardData.spaces });
+    if (orderResult.error) {
+      return err('START_ORDER_FAILED', orderResult.error, 500);
+    }
+    state = orderResult.state;
+    state.log.push(`Game started. ${state.players[order[0]].name} goes first.`);
     const serialized = engine.serializeState(state);
     const board = { spaces: boardData.spaces };
 
@@ -339,6 +352,7 @@ async function startGame({ account, gameId, db = database() }) {
       status: 'ACTIVE',
       version: 1,
       state,
+      events: orderResult.events,
       players: players.map(player => ({
         accountId: player.account_id,
         seatIndex: Number(player.seat_index),
