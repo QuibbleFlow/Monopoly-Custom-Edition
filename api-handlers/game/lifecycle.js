@@ -445,6 +445,16 @@ async function getLobby({ account, gameId, db = database() }) {
         ? players.length >= 2 && players.every(player => player.returned_at)
         : players.length >= 2
     );
+    // Viewing a paused lobby counts as this original player returning.
+    // This makes reconnect idempotent and avoids a stale "Missing" flag when
+    // the account opens the paused match through Load/Refresh instead of Join.
+    if (game.status === 'PAUSED' && !membership[0].returned_at) {
+      await tx`UPDATE game_players SET returned_at = now()
+        WHERE game_id = ${normalizedGameId} AND account_id = ${account.id} AND returned_at IS NULL`;
+      const ownPlayer = players.find(player => player.account_id === account.id);
+      if (ownPlayer) ownPlayer.returned_at = new Date();
+    }
+
     const canResume = game.status === 'PAUSED' && game.host_account_id === account.id &&
       players.length >= 2 && players.every(player => player.returned_at);
 
