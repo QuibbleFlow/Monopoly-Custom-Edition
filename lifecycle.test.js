@@ -797,6 +797,112 @@ test('debt blocks unrelated actions, permits debtor liquidation, and bankruptcy 
   assert.equal(bankruptGame.db.state.states[0].version, 4);
 });
 
+test('authoritative trades round-trip between the two authenticated participants', async () => {
+  const { db, gameId } = await createActiveGame();
+  editStoredGameState(db, state => {
+    state.phase = 'after';
+    state.owners[1] = 0;
+    state.owners[3] = 1;
+  });
+
+  const proposed = await executeGameAction({
+    account: { id: 'account-a' },
+    gameId,
+    action: {
+      type: 'PROPOSE_TRADE',
+      trade: { from: 0, to: 1, give: [1], get: [3], giveCash: 0, getCash: 0 },
+    },
+    version: 1,
+    requestId: 'trade-propose',
+    sql: db,
+  });
+  assert.equal(proposed.ok, true);
+  assert.equal(proposed.version, 2);
+  assert.equal(proposed.state.trade.stage, 'review');
+  assert.equal(proposed.state.trade.from, 0);
+  assert.equal(proposed.state.trade.to, 1);
+  assert.ok(proposed.events.some(event => event.type === 'TRADE_PROPOSED'));
+
+  const wrongParticipant = await executeGameAction({
+    account: { id: 'account-a' },
+    gameId,
+    action: { type: 'ACCEPT_TRADE' },
+    version: 2,
+    requestId: 'trade-wrong-accept',
+    sql: db,
+  });
+  assert.equal(wrongParticipant.ok, false);
+  assert.equal(wrongParticipant.error.code, 'NOT_YOUR_TURN');
+
+  const accepted = await executeGameAction({
+    account: { id: 'account-b' },
+    gameId,
+    action: { type: 'ACCEPT_TRADE' },
+    version: 2,
+    requestId: 'trade-accept',
+    sql: db,
+  });
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.version, 3);
+  assert.equal(accepted.state.trade, null);
+  assert.equal(accepted.state.owners[1], 1);
+  assert.equal(accepted.state.owners[3], 0);
+  assert.ok(accepted.state.viewTrade && accepted.state.viewTrade.expiresAt > Date.now());
+  assert.ok(accepted.events.some(event => event.type === 'TRADE_COMPLETED'));
+});
+
+test('authoritative trade decline and postpone stay restricted to the recipient', async () => {
+  const declinedGame = await createActiveGame();
+  editStoredGameState(declinedGame.db, state => {
+    state.phase = 'after';
+    state.owners[1] = 0;
+  });
+  await executeGameAction({
+    account: { id: 'account-a' },
+    gameId: declinedGame.gameId,
+    action: { type: 'PROPOSE_TRADE', trade: { to: 1, give: [1], get: [], giveCash: 0, getCash: 0 } },
+    version: 1,
+    requestId: 'decline-propose',
+    sql: declinedGame.db,
+  });
+  const declined = await executeGameAction({
+    account: { id: 'account-b' },
+    gameId: declinedGame.gameId,
+    action: { type: 'DECLINE_TRADE' },
+    version: 2,
+    requestId: 'decline-trade',
+    sql: declinedGame.db,
+  });
+  assert.equal(declined.ok, true);
+  assert.equal(declined.state.trade, null);
+  assert.ok(declined.events.some(event => event.type === 'TRADE_DECLINED'));
+
+  const postponedGame = await createActiveGame();
+  editStoredGameState(postponedGame.db, state => {
+    state.phase = 'after';
+    state.owners[1] = 0;
+  });
+  await executeGameAction({
+    account: { id: 'account-a' },
+    gameId: postponedGame.gameId,
+    action: { type: 'PROPOSE_TRADE', trade: { to: 1, give: [1], get: [], giveCash: 0, getCash: 0 } },
+    version: 1,
+    requestId: 'postpone-propose',
+    sql: postponedGame.db,
+  });
+  const postponed = await executeGameAction({
+    account: { id: 'account-b' },
+    gameId: postponedGame.gameId,
+    action: { type: 'POSTPONE_TRADE' },
+    version: 2,
+    requestId: 'postpone-trade',
+    sql: postponedGame.db,
+  });
+  assert.equal(postponed.ok, true);
+  assert.equal(postponed.state.trade.postponed, true);
+  assert.ok(postponed.events.some(event => event.type === 'TRADE_POSTPONED'));
+});
+
 test('property management validates owners and allows consecutive house purchases plus mortgage cycles', async () => {
   const { db, gameId } = await createActiveGame();
   editStoredGameState(db, state => {
