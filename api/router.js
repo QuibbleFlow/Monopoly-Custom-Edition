@@ -66,57 +66,72 @@ function notFound(res) {
 }
 
 module.exports = async function apiRouter(req, res) {
-  const parts = getPathParts(req);
-  if (!parts.length) return notFound(res);
+  try {
+    const parts = getPathParts(req);
+    if (!parts.length) return notFound(res);
 
-  const [section, action, idOrAction] = parts;
+    const [section, action, idOrAction] = parts;
 
-  if (section === 'auth') {
-    const handler = routes.auth[action];
-    if (!handler || parts.length !== 2) return notFound(res);
-    return handler(req, res);
-  }
-
-  if (section === 'boards') {
-    if (parts.length === 1) return routes.boards.index(req, res);
-    if (parts.length === 2) {
-      return routes.boards.item(withQuery(req, { id: action }), res);
+    if (section === 'auth') {
+      const handler = routes.auth[action];
+      if (!handler || parts.length !== 2) return notFound(res);
+      return handler(req, res);
     }
-    if (parts.length === 3 && idOrAction === 'share') {
-      return routes.boards.share(withQuery(req, { id: action }), res);
+
+    if (section === 'boards') {
+      if (parts.length === 1) return routes.boards.index(req, res);
+      if (parts.length === 2) {
+        return routes.boards.item(withQuery(req, { id: action }), res);
+      }
+      if (parts.length === 3 && idOrAction === 'share') {
+        return routes.boards.share(withQuery(req, { id: action }), res);
+      }
+      return notFound(res);
     }
+
+    if (section === 'friends') {
+      if (parts.length === 1) return routes.friends.index(req, res);
+      if (parts.length === 2 && action === 'search') return routes.friends.search(req, res);
+      if (parts.length === 2 && action === 'requests') return routes.friends.requests(req, res);
+      if (parts.length === 3 && action === 'requests') {
+        return routes.friends.request(withQuery(req, { id: idOrAction }), res);
+      }
+      if (parts.length === 2) {
+        return routes.friends.item(withQuery(req, { id: action }), res);
+      }
+      return notFound(res);
+    }
+
+    if (section === 'game') {
+      const handler = routes.game[action];
+      if (!handler || parts.length !== 2) return notFound(res);
+      return handler(req, res);
+    }
+
+    if (section === 'profile') {
+      const handler = routes.profile[action];
+      if (!handler || parts.length !== 2) return notFound(res);
+      return handler(req, res);
+    }
+
+    if (section === 'settings') {
+      if (parts.length !== 1) return notFound(res);
+      return routes.settings.index(req, res);
+    }
+
     return notFound(res);
+  } catch (error) {
+    console.error('API route failed:', {
+      method: req?.method,
+      url: req?.url,
+      error: error && error.stack ? error.stack : error,
+    });
+    return res.status(500).json({
+      ok: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'The server encountered an unexpected error while processing this request.',
+      },
+    });
   }
-
-  if (section === 'friends') {
-    if (parts.length === 1) return routes.friends.index(req, res);
-    if (parts.length === 2 && action === 'search') return routes.friends.search(req, res);
-    if (parts.length === 2 && action === 'requests') return routes.friends.requests(req, res);
-    if (parts.length === 3 && action === 'requests') {
-      return routes.friends.request(withQuery(req, { id: idOrAction }), res);
-    }
-    if (parts.length === 2) {
-      return routes.friends.item(withQuery(req, { id: action }), res);
-    }
-    return notFound(res);
-  }
-
-  if (section === 'game') {
-    const handler = routes.game[action];
-    if (!handler || parts.length !== 2) return notFound(res);
-    return handler(req, res);
-  }
-
-  if (section === 'profile') {
-    const handler = routes.profile[action];
-    if (!handler || parts.length !== 2) return notFound(res);
-    return handler(req, res);
-  }
-
-  if (section === 'settings') {
-    if (parts.length !== 1) return notFound(res);
-    return routes.settings.index(req, res);
-  }
-
-  return notFound(res);
 };

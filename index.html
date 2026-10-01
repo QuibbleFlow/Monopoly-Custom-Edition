@@ -12,13 +12,7 @@
      as the closest free stand-in: a geometric sans with the same round,
      even-stroked letterforms as Kabel/Futura. See --font in :root. -->
 <link href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<!-- Peer-to-peer online play: two browsers connect directly once PeerJS
-     introduces them by name, through PeerJS's free public broker. If
-     this cannot load or reach that broker (a restrictive network, or a
-     sandboxed preview), Peer stays undefined and the game shows a clear
-     message instead of a broken "Play online" button; see HAS_PEER in
-     the script below. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231d4d9f'/%3E%3Cpath d='M20 18h24v10H20zm0 14h24v10H20zm-2 12h28v2H18zm10-20h8v18h-8z' fill='%23f8d46d'/%3E%3C/svg%3E">
 
 <!--
 =====================================================================
@@ -4468,6 +4462,14 @@ async function backendCreateGame() {
     setAccountStatus('Sign in to create a server lobby.');
     return;
   }
+
+  if (window.__backendCreateGameInFlight) {
+    return;
+  }
+
+  window.__backendCreateGameInFlight = true;
+  setAccountStatus('Creating server lobby…');
+
   try {
     const result = await backendGameRequest('/api/game/create', {
       method: 'POST',
@@ -4484,6 +4486,8 @@ async function backendCreateGame() {
     renderSetup();
   } catch (error) {
     setAccountStatus(error.message);
+  } finally {
+    window.__backendCreateGameInFlight = false;
   }
 }
 
@@ -4619,7 +4623,7 @@ function applyAccountSettings(settings = {}) {
     gamePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.gamePreferences, ...(settings.gamePreferences || {}) },
     other: settings.other || {},
   };
-  if ([2, 3, 4].includes(accountSettings.gamePreferences.playerCount)) {
+  if ([2, 3, 4, 5, 6, 7, 8].includes(accountSettings.gamePreferences.playerCount)) {
     setup.count = accountSettings.gamePreferences.playerCount;
   }
   musicVolume = Math.max(0, Math.min(100, Number(accountSettings.musicVolume))) / 100;
@@ -4928,16 +4932,15 @@ function renderSetup() {
       <div class="panel acc-orange">
         <h2>🎲 Play on one screen</h2>
         <div class="muted">Pass the device around. How many players?</div>
-        <div class="seg">${[2, 3, 4].map(n => `<button class="btn ${setup.count === n ? '' : 'alt'}" onclick="setCount(${n})">${n}</button>`).join('')}</div>
+        <div class="seg">${[2, 3, 4, 5, 6, 7, 8].map(n => `<button class="btn ${setup.count === n ? '' : 'alt'}" onclick="setCount(${n})">${n}</button>`).join('')}</div>
         ${inputs}
         <button class="btn" style="width:100%;margin-top:12px" onclick="startGame()">Start game</button>
       </div>
       <div class="panel acc-red">
-        <h2>🌐 Play online, peer to peer</h2>
-        <p class="muted">One person hosts under a lobby name; everyone else joins by typing that name in. No account, code-pasting or server needed &mdash; PeerJS introduces your browsers, then the game talks directly between them.</p>
+        <h2>🌐 Play online</h2>
         <div class="row">
-          <button class="btn" onclick="setup.screen='host'; renderSetup();">Host a game</button>
-          <button class="btn alt" onclick="setup.screen='join'; renderSetup();">Join a game</button>
+          <button class="btn" onclick="backendCreateGame();">Create game</button>
+          <button class="btn alt" onclick="setup.screen='serverJoin'; renderSetup();">Join game</button>
         </div>
       </div>
       ${howToPlayHTML()}

@@ -6,6 +6,12 @@ const expectedColumns = {
   friend_requests: ['id', 'sender_id', 'recipient_id', 'status', 'created_at', 'responded_at'],
   friendships: ['account_low', 'account_high', 'created_at'],
   custom_boards: ['id', 'owner_id', 'name', 'property_names', 'copied_from', 'created_at', 'updated_at'],
+  games: ['id', 'host_account_id', 'status', 'selected_board_id', 'resume_save_id', 'created_at', 'started_at', 'updated_at'],
+  game_players: ['game_id', 'account_id', 'seat_index', 'joined_at', 'returned_at'],
+  game_states: ['id', 'owner_id', 'state', 'board', 'version', 'created_at', 'updated_at'],
+  game_action_requests: ['game_id', 'request_id', 'result_json', 'created_at'],
+  game_saves: ['id', 'owner_id', 'source_game_id', 'name', 'status', 'version', 'state', 'board', 'players', 'selected_board_id', 'created_at', 'updated_at'],
+  game_results: ['game_id', 'winner_account_id', 'placements', 'created_at'],
 };
 
 const expectedIndexes = [
@@ -19,6 +25,19 @@ const expectedIndexes = [
   'friendships_pkey',
   'custom_boards_pkey',
   'custom_boards_owner_updated_idx',
+  'games_pkey',
+  'games_resume_save_idx',
+  'game_players_pkey',
+  'game_players_game_id_seat_index_key',
+  'game_players_account_idx',
+  'game_players_game_seat_idx',
+  'game_states_pkey',
+  'game_action_requests_pkey',
+  'game_action_requests_game_created_idx',
+  'game_saves_pkey',
+  'game_saves_owner_updated_idx',
+  'game_results_pkey',
+  'game_results_winner_idx',
 ];
 
 const expectedForeignKeys = [
@@ -28,6 +47,13 @@ const expectedForeignKeys = [
   'friendships_account_low_fkey',
   'friendships_account_high_fkey',
   'custom_boards_owner_id_fkey',
+  'games_host_account_id_fkey',
+  'game_players_game_id_fkey',
+  'game_players_account_id_fkey',
+  'game_states_owner_id_fkey',
+  'game_saves_owner_id_fkey',
+  'game_results_game_id_fkey',
+  'game_results_winner_account_id_fkey',
 ];
 
 const expectedCheckConstraints = [
@@ -35,6 +61,11 @@ const expectedCheckConstraints = [
   'friend_requests_check',
   'friendships_check',
   'custom_boards_name_check',
+  'games_status_check',
+  'game_players_seat_index_check',
+  'game_saves_name_check',
+  'game_saves_status_check',
+  'game_saves_version_check',
 ];
 
 async function main() {
@@ -50,22 +81,32 @@ async function main() {
     const columns = await sql`SELECT table_name, column_name
       FROM information_schema.columns
       WHERE table_schema = current_schema()
-        AND table_name = ANY(ARRAY['accounts', 'account_sessions', 'friend_requests', 'friendships', 'custom_boards'])`;
+          AND table_name = ANY(ARRAY['accounts', 'account_sessions', 'friend_requests', 'friendships', 'custom_boards',
+            'games', 'game_players', 'game_states', 'game_action_requests', 'game_saves', 'game_results'])`;
     const indexes = await sql`SELECT indexname FROM pg_indexes
       WHERE schemaname = current_schema()
-        AND indexname = ANY(ARRAY['accounts_pkey', 'accounts_username_lower_unique',
-          'account_sessions_pkey', 'account_sessions_expiry_idx', 'friend_requests_pkey',
-          'friend_requests_pending_pair_unique', 'friend_requests_recipient_status_idx',
-          'friendships_pkey', 'custom_boards_pkey', 'custom_boards_owner_updated_idx'])`;
+          AND indexname = ANY(ARRAY['accounts_pkey', 'accounts_username_lower_unique',
+            'account_sessions_pkey', 'account_sessions_expiry_idx', 'friend_requests_pkey',
+            'friend_requests_pending_pair_unique', 'friend_requests_recipient_status_idx',
+            'friendships_pkey', 'custom_boards_pkey', 'custom_boards_owner_updated_idx',
+            'games_pkey', 'games_resume_save_idx', 'game_players_pkey', 'game_players_game_id_seat_index_key',
+            'game_players_account_idx', 'game_players_game_seat_idx', 'game_states_pkey',
+            'game_action_requests_pkey', 'game_action_requests_game_created_idx', 'game_saves_pkey',
+            'game_saves_owner_updated_idx', 'game_results_pkey', 'game_results_winner_idx'])`;
     const foreignKeys = await sql`SELECT conname FROM pg_constraint
       WHERE connamespace = to_regnamespace(current_schema()) AND contype = 'f'
-        AND conname = ANY(ARRAY['account_sessions_account_id_fkey', 'friend_requests_sender_id_fkey',
-          'friend_requests_recipient_id_fkey', 'friendships_account_low_fkey',
-          'friendships_account_high_fkey', 'custom_boards_owner_id_fkey'])`;
+          AND conname = ANY(ARRAY['account_sessions_account_id_fkey', 'friend_requests_sender_id_fkey',
+            'friend_requests_recipient_id_fkey', 'friendships_account_low_fkey',
+            'friendships_account_high_fkey', 'custom_boards_owner_id_fkey',
+            'games_host_account_id_fkey', 'game_players_game_id_fkey', 'game_players_account_id_fkey',
+            'game_states_owner_id_fkey', 'game_saves_owner_id_fkey', 'game_results_game_id_fkey',
+            'game_results_winner_account_id_fkey'])`;
     const checkConstraints = await sql`SELECT conname FROM pg_constraint
       WHERE connamespace = to_regnamespace(current_schema()) AND contype = 'c'
-        AND conname = ANY(ARRAY['friend_requests_status_check', 'friend_requests_check',
-          'friendships_check', 'custom_boards_name_check'])`;
+          AND conname = ANY(ARRAY['friend_requests_status_check', 'friend_requests_check',
+            'friendships_check', 'custom_boards_name_check', 'games_status_check',
+            'game_players_seat_index_check', 'game_saves_name_check', 'game_saves_status_check',
+            'game_saves_version_check'])`;
 
     const foundColumns = new Map();
     for (const row of columns) {

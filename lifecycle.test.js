@@ -3,9 +3,22 @@ const test = require('node:test');
 const engine = require('./game-engine.js');
 
 const { createGame, joinGame, leaveGame, startGame, getLobby, getMyGames } = require('./api-handlers/game/lifecycle.js');
+const { ensureDatabaseRuntimeState } = require('./lib/account.js');
 const { getGameState, handleGetGameStateRoute } = require('./api-handlers/game/state.js');
 const { executeGameAction } = require('./api-handlers/game/action.js');
 const { makeDbState, makeDb } = require('./test-support/mock-db.js');
+
+test('database schema guard catches missing required tables before lobby creation', async () => {
+  const sql = async () => [
+    { table_name: 'accounts', column_name: 'id' },
+    { table_name: 'account_sessions', column_name: 'token_hash' },
+  ];
+
+  await assert.rejects(
+    () => ensureDatabaseRuntimeState(sql),
+    /Database schema is incomplete\. Missing required objects: accounts\.username/
+  );
+});
 
 async function createActiveGame() {
   const db = makeDb();
