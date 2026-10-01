@@ -7,6 +7,7 @@ const { ensureDatabaseRuntimeState } = require('./lib/account.js');
 const { getGameState, handleGetGameStateRoute } = require('./api-handlers/game/state.js');
 const { executeGameAction } = require('./api-handlers/game/action.js');
 const { makeDbState, makeDb } = require('./test-support/mock-db.js');
+const apiRouter = require('./api/router.js');
 
 test('database schema guard catches missing required tables before lobby creation', async () => {
   const sql = async () => [
@@ -18,6 +19,25 @@ test('database schema guard catches missing required tables before lobby creatio
     () => ensureDatabaseRuntimeState(sql),
     /Database schema is incomplete\. Missing required objects: accounts\.username/
   );
+});
+
+test('consolidated router maps the hyphenated my-games URL to its handler', async () => {
+  const response = {
+    headers: {},
+    statusCode: 200,
+    setHeader(name, value) { this.headers[name] = value; return this; },
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+
+  await apiRouter({
+    method: 'GET',
+    url: '/api/game/my-games',
+    headers: { cookie: '' },
+  }, response);
+
+  assert.notEqual(response.statusCode, 404);
+  assert.ok([401, 503].includes(response.statusCode));
 });
 
 async function createActiveGame() {

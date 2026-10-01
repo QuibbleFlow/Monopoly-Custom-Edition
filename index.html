@@ -17,7 +17,7 @@
 <!--
 =====================================================================
   MONOPOLY CANADIAN EDITION
-  Pass and play on one screen, 2 to 4 players.
+  Pass and play on one screen, 2 to 8 players.
 =====================================================================
 
   The page, styling, and presentation live here. Deterministic game
@@ -1339,7 +1339,7 @@ const reduceMotion = false;
 // Remembers the previous screen so we can animate what changed
 let prevMoney = {}, prevOwners = null, prevHouses = null, modalKey = '';
 
-const setup = { count: 2, names: ['Player 1', 'Player 2', 'Player 3', 'Player 4'], screen: '' };
+const setup = { count: 2, names: Array.from({ length: 8 }, (_, i) => `Player ${i + 1}`), screen: '' };
 let selectedHostBoard = null;
 
 /* THE ONLINE RANDOMNESS SHIM
@@ -1421,7 +1421,7 @@ function inkFor(hex) {
 }
 
 function newGame(names, colors, boardNames = {}, accountIds = []) {
-  // Player "id" is a fixed seat number (0 = host, 1..3 = guests in join
+  // Player "id" is a fixed seat number (0 = host, 1..7 = guests in join
   // order) that never changes. Turn ORDER is a separate shuffled list of
   // ids called turnOrder; game.current is an index into turnOrder, not a
   // player id. This keeps each person's seat stable in online play even

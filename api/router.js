@@ -103,7 +103,7 @@ module.exports = async function apiRouter(req, res) {
     }
 
     if (section === 'game') {
-      const handler = routes.game[action];
+      const handler = action === 'my-games' ? routes.game.myGames : routes.game[action];
       if (!handler || parts.length !== 2) return notFound(res);
       return handler(req, res);
     }

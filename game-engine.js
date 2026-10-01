@@ -5,7 +5,8 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const DEFAULT_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0'];
+  const DEFAULT_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0',
+    '#f28c1b', '#0fa3a3', '#d6479b', '#6b4f2a'];
 
   function createState(options) {
     const {
