@@ -75,7 +75,8 @@ test('server UI uses invitation cards, host Delete confirmation, and host Save &
 
   assert.match(html, /function incomingGameInvitationsHTML\(\)/);
   assert.match(html, /backendRespondToInvitation\('\$\{esc\(invitation\.invitationId\)\}','accept'\)/);
-  assert.match(html, /game\.isHost \? `<button class="btn alt" onclick="backendDeleteGame/);
+  assert.match(html, /game\.isHost \? `<button class="btn alt" onclick="backendRenameGame/);
+  assert.match(html, /onclick="backendDeleteGame\('\$\{esc\(gameId\)\}'\)">Delete<\/button>/);
   assert.match(html, /window\.confirm\('Delete this server game/);
   assert.match(html, /'Save &amp; Quit'/);
   assert.match(html, /backendGameRequest\('\/api\/game\/pause'/);
