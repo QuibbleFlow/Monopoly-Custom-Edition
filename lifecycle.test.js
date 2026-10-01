@@ -585,6 +585,30 @@ test('authoritative doubles retain the turn and a third double sends the player 
   assert.equal(thirdDouble.version, 2);
 });
 
+test('host timer tick advances an expired guest turn without requiring the host to own that turn', async () => {
+  const { db, gameId } = await createActiveGame();
+  editStoredGameState(db, state => {
+    state.current = 1;
+    state.phase = 'after';
+    state.tradeTimerEnd = Date.now() - 1000;
+  });
+
+  const tick = await executeGameAction({
+    account: { id: 'account-a' },
+    gameId,
+    action: { type: 'GAME_TICK' },
+    version: 1,
+    requestId: 'host-tick',
+    sql: db,
+  });
+
+  assert.equal(tick.ok, true);
+  assert.equal(tick.version, 2);
+  assert.equal(tick.state.current, 0);
+  assert.ok(tick.events.some(event => event.type === 'ACTION_TIMER_EXPIRED'));
+  assert.ok(tick.events.some(event => event.type === 'TURN_CHANGED' && event.playerId === 0));
+});
+
 test('property purchase is authorized, priced by the engine, idempotent, and stale writes are rejected', async () => {
   const { db, gameId } = await createActiveGame();
   editStoredGameState(db, state => {
