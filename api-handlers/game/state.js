@@ -40,52 +40,66 @@ async function getGameState({ account, gameId, db = database() }) {
     return err('INVALID_GAME_ID', 'A valid gameId is required.', 400);
   }
 
-  return db.begin(async tx => {
-    const games = await tx`SELECT * FROM games WHERE id = ${normalizedGameId} FOR SHARE`;
-    const game = games[0];
-    if (!game) {
-      return err('GAME_NOT_FOUND', 'Game not found.', 404);
-    }
+  // One statement gives a consistent snapshot of status, membership,
+  // authoritative state, and the latest event payload. Active clients poll
+  // this endpoint frequently, so avoiding a transaction plus four separate
+  // round trips materially reduces server multiplayer latency.
+  const rows = await db`
+    SELECT
+      g.status,
+      EXISTS (
+        SELECT 1
+        FROM game_players gp
+        WHERE gp.game_id = g.id
+          AND gp.account_id = ${account.id}
+      ) AS is_member,
+      gs.version,
+      gs.state,
+      gs.board,
+      (
+        SELECT ar.result_json
+        FROM game_action_requests ar
+        WHERE ar.game_id = g.id
+        ORDER BY ar.created_at DESC
+        LIMIT 1
+      ) AS result_json
+    FROM games g
+    LEFT JOIN game_states gs ON gs.id = g.id
+    WHERE g.id = ${normalizedGameId}
+  `;
 
-    const membership = await tx`SELECT * FROM game_players WHERE game_id = ${normalizedGameId} AND account_id = ${account.id}`;
-    if (!membership[0]) {
-      return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
-    }
+  const row = rows[0];
+  if (!row) {
+    return err('GAME_NOT_FOUND', 'Game not found.', 404);
+  }
+  if (!row.is_member) {
+    return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
+  }
+  if (row.state == null || row.version == null) {
+    return err('GAME_NOT_FOUND', 'Game state not found.', 404);
+  }
 
-    const stateRows = await tx`SELECT id, version, state, board FROM game_states WHERE id = ${normalizedGameId}`;
-    const stateRow = stateRows[0];
-    if (!stateRow) {
-      return err('GAME_NOT_FOUND', 'Game state not found.', 404);
-    }
+  const version = Number(row.version) || 1;
+  const state = engine.deserializeState(row.state);
+  let events = [];
+  let actionResult = row.result_json;
+  if (typeof actionResult === 'string') {
+    try { actionResult = JSON.parse(actionResult); } catch (error) { actionResult = null; }
+  }
+  if (Number(actionResult?.version) === version && Array.isArray(actionResult.events)) {
+    events = actionResult.events;
+  }
 
-    const version = Number(stateRow.version) || 1;
-    const state = engine.deserializeState(stateRow.state);
-    const actionRows = await tx`SELECT result_json FROM game_action_requests
-      WHERE game_id = ${normalizedGameId}
-      ORDER BY created_at DESC
-      LIMIT 1`;
-    let events = [];
-    if (actionRows[0] && actionRows[0].result_json) {
-      let actionResult = actionRows[0].result_json;
-      if (typeof actionResult === 'string') {
-        try { actionResult = JSON.parse(actionResult); } catch (error) { actionResult = null; }
-      }
-      if (Number(actionResult?.version) === version && Array.isArray(actionResult.events)) {
-        events = actionResult.events;
-      }
-    }
-
-    const visibleState = redactStateForAccount(state, account.id);
-    return {
-      ok: true,
-      gameId: normalizedGameId,
-      status: game.status,
-      version,
-      state: visibleState,
-      events: redactEventsForAccount(events, state, account.id),
-      board: stateRow.board || {},
-    };
-  });
+  const visibleState = redactStateForAccount(state, account.id);
+  return {
+    ok: true,
+    gameId: normalizedGameId,
+    status: row.status,
+    version,
+    state: visibleState,
+    events: redactEventsForAccount(events, state, account.id),
+    board: row.board || {},
+  };
 }
 
 async function handleGetGameStateRoute(req, res, deps = {}) {
