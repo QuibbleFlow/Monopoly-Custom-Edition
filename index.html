@@ -4903,6 +4903,7 @@ async function sendLobbyFriendRequest(username) {
 
 async function backendRefreshLobby(gameId, options = {}) {
   if (!gameId || backendLobbyPollInFlight) return;
+  const previousStatus = backendLobby?.gameId === gameId ? backendLobby?.game?.status : null;
   backendLobbyPollInFlight = true;
   try {
     const result = await backendGameRequest(`/api/game/lobby?gameId=${encodeURIComponent(gameId)}`);
@@ -4915,7 +4916,10 @@ async function backendRefreshLobby(gameId, options = {}) {
     };
     const status = result.status || result.game?.status;
     if (status === 'ACTIVE') {
-      authoritativeShowStartIntroGameId = result.gameId;
+      // Only a client that was already waiting in this fresh lobby gets the
+      // starting-order reveal. Reopening/reconnecting to an ACTIVE match
+      // should catch up immediately instead of replaying the match intro.
+      if (previousStatus === 'WAITING') authoritativeShowStartIntroGameId = result.gameId;
       stopBackendLobbyPolling();
       if (window.authoritativeGame.gameId && window.authoritativeGame.gameId !== result.gameId) {
         await window.authoritativeGame.clearAuthoritativeState();
