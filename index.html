@@ -4463,7 +4463,7 @@ async function backendResumeGame(gameId) {
       body: JSON.stringify({ gameId }),
     });
     if (window.authoritativeGame) {
-      authoritativeShowStartIntroGameId = result.gameId;
+      // Resuming an existing match must not replay the fresh-match order reveal.
       await activateBackendGame({
         gameId: result.gameId,
         version: result.version || 1,
@@ -4489,10 +4489,13 @@ function startBackendLobbyPolling(gameId) {
   if (!gameId) return;
   if (backendLobbyPollId && backendLobby && backendLobby.gameId === gameId) return;
   stopBackendLobbyPolling();
+  // Check immediately, then keep a short fallback poll. This removes the
+  // guaranteed one-second wait after another player changes lobby state.
+  backendRefreshLobby(gameId, { fromPoll: true });
   backendLobbyPollId = setInterval(() => {
     if (document.visibilityState === 'hidden' || backendLobbyPollInFlight || !backendLobby || backendLobby.gameId !== gameId) return;
     backendRefreshLobby(gameId, { fromPoll: true });
-  }, 1000);
+  }, 250);
 }
 
 async function activateBackendGame(payload) {
@@ -4750,6 +4753,7 @@ async function backendStartGame(gameId) {
       canStart: false,
     };
     if (window.authoritativeGame) {
+      authoritativeShowStartIntroGameId = result.gameId;
       await activateBackendGame({
         gameId: result.gameId,
         version: result.version || 1,
