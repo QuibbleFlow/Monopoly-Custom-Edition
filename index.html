@@ -2934,10 +2934,10 @@ function updateHud() {
 // The wooden shelf: manage, deeds, trade, and the main action button
 function updateDock() {
   const p = cur();
-  // Backend turn ownership governs only the migrated roll action. Other
-  // controls retain their existing PeerJS seat permissions until migrated.
+  // Server multiplayer derives control from the authenticated account.
+  // It never treats net.myPid/PeerJS seat state as authority.
   const backendMode = isBackendAuthoritativeGame();
-  const mine = !net.role || p.id === net.myPid;
+  const mine = backendMode ? backendPlayerMine(p.id) : (!net.role || p.id === net.myPid);
   const debtMine = backendMode
     ? !!(game.debt && backendAccountControlsPlayer(game.debt.pid))
     : (!net.role || (game.debt && game.players[game.debt.pid].id === net.myPid));
