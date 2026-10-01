@@ -1231,10 +1231,19 @@ function isBackendAuthoritativeGame() {
 }
 function backendActionActorId(state = window.authoritativeGame && window.authoritativeGame.state) {
   if (!state) return null;
+  if (state.trade) {
+    if (state.trade.stage === 'review') return state.trade.to;
+    if (state.trade.stage === 'edit') return state.trade.from;
+  }
   if (state.auction) return state.auction.turn;
   if (state.debt) return state.debt.pid;
   const current = state.turnOrder && state.turnOrder[state.current];
   return current == null ? null : current;
+}
+function backendPlayerMine(playerId, state = game) {
+  if (!isBackendAuthoritativeGame() || !accountUser || !state) return false;
+  const player = state.players && state.players.find(candidate => candidate.id === playerId);
+  return !!player && player.accountId === accountUser.id;
 }
 function backendAccountControlsPlayer(playerId, state = window.authoritativeGame && window.authoritativeGame.state) {
   if (!isBackendAuthoritativeGame() || !accountUser || !state) return false;
@@ -1261,6 +1270,10 @@ function authoritativeActionSpec(name, args) {
     case 'declareBankruptcy': return { type: 'CONFIRM_BANKRUPTCY' };
     case 'payJailFine': return { type: 'PAY_JAIL_FINE' };
     case 'endTurnClick': return { type: 'END_TURN' };
+    case 'acceptTrade': return { type: 'ACCEPT_TRADE' };
+    case 'declineTrade': return { type: 'DECLINE_TRADE' };
+    case 'postponeTrade': return { type: 'POSTPONE_TRADE' };
+    case 'cancelTrade': return { type: 'CANCEL_TRADE' };
     default: return null;
   }
 }
@@ -1458,8 +1471,7 @@ function attachGame() {
   document.documentElement.style.setProperty('--k', reduceMotion ? 0 : ANIM_SCALE);
   buildShell();
   setDice(game.dice[0], game.dice[1]);
-  if (isBackendAuthoritativeGame()) stopGameTick();
-  else startGameTick();
+  startGameTick();
   render();
 }
 
@@ -2544,6 +2556,7 @@ const mortgageFee = pos => Math.ceil(mortgageValue(pos) * MORTGAGE_INTEREST);
 function openTrade() {
   if (!canManage() || game.trade || ui.manage) return;
   const me = cur();
+  if (isBackendAuthoritativeGame() && !backendPlayerMine(me.id)) return;
   if (!game.players.some(q => q.id !== me.id && !q.bankrupt)) return;
   ui.reviewingTrade = false;
   game.trade = { from: me.id, to: null, giveCash: 0, getCash: 0, give: [], get: [], stage: 'pick', error: '' };
@@ -2682,7 +2695,10 @@ function openDeeds() {
   // manually switch. Offline pass-and-play has no single "me" (one
   // device, everyone shares it), so it still starts on the current
   // player there.
-  const startPid = net.role ? net.myPid : cur().id;
+  const backendMe = isBackendAuthoritativeGame() && accountUser
+    ? game.players.find(player => player.accountId === accountUser.id)
+    : null;
+  const startPid = backendMe ? backendMe.id : (net.role ? net.myPid : cur().id);
   ui.deeds = { pid: startPid, sel: null };
   render();
 }
@@ -2958,7 +2974,9 @@ function updateDock() {
 function tradeReviewBtnHTML() {
   const t = game.trade;
   if (!t || !t.postponed) return '';
-  const mine = !net.role || t.from === net.myPid || t.to === net.myPid;
+  const mine = isBackendAuthoritativeGame()
+    ? (backendPlayerMine(t.from) || backendPlayerMine(t.to))
+    : (!net.role || t.from === net.myPid || t.to === net.myPid);
   if (!mine) return '';
   return `<button class="dbtn" onclick="openTradeReview()">Trade Postponed &mdash; Review</button>`;
 }
@@ -3032,6 +3050,7 @@ async function handleServerGamePaused(gameId, refreshGames = false) {
 function updatePauseBtn() {
   const el = $('pauseBtnHolder');
   if (!el) return;
+  if (isBackendAuthoritativeGame()) { el.innerHTML = ''; return; }
   const isHost = !net.role || net.myPid === 0;
   if (!game || !isHost || net.role === 'guest') { el.innerHTML = ''; return; }
   el.innerHTML = `<button class="btn alt" onclick="act('hostSetPause', ${!game.paused}, Date.now())">${game.paused ? 'Resume game' : 'Pause game'}</button>`;
@@ -3039,6 +3058,7 @@ function updatePauseBtn() {
 function updatePauseOverlay() {
   const el = $('pauseOverlay');
   if (!el) return;
+  if (isBackendAuthoritativeGame()) { el.style.display = 'none'; el.innerHTML = ''; return; }
   if (!game || !game.paused) { el.style.display = 'none'; el.innerHTML = ''; return; }
   const isHost = !net.role || net.myPid === 0;
   el.style.display = 'flex';
@@ -3249,7 +3269,9 @@ function tradeHTML() {
   // in progress, but only the person it's actually waiting on gets
   // working controls, same as the buy and auction dialogs. Offline
   // pass-and-play (no net.role) skips this, same as everywhere else.
-  const proposerMine = !net.role || me.id === net.myPid;
+  const proposerMine = isBackendAuthoritativeGame()
+    ? backendPlayerMine(me.id)
+    : (!net.role || me.id === net.myPid);
   if (t.stage === 'pick') {
     const opts = game.players.filter(q => q.id !== me.id && !q.bankrupt)
       .map(q => `<button class="pick" ${proposerMine ? '' : 'disabled'} onclick="act('setTradePartner', ${q.id})"><span class="dot" style="background:${q.color};display:inline-block;margin-right:8px"></span>${esc(q.name)}<small>${fmt(q.money)} cash, ${ownedSquares(q.id).length} properties</small></button>`).join('');
@@ -3258,7 +3280,9 @@ function tradeHTML() {
   }
   const you = game.players[t.to];
   if (t.stage === 'review') {
-    const recipientMine = !net.role || you.id === net.myPid;
+    const recipientMine = isBackendAuthoritativeGame()
+      ? backendPlayerMine(you.id)
+      : (!net.role || you.id === net.myPid);
     const summary = `<div class="cols trade-summary">
         <div class="col"><h3>${esc(you.name)} receives</h3>${tradeChips(t.give, t.giveCash)}</div>
         <div class="col"><h3>${esc(me.name)} receives</h3>${tradeChips(t.get, t.getCash)}</div>
@@ -3396,7 +3420,11 @@ function updateModal() {
     key = 'buy'; html = buyHTML(); cls = 'felt';
   } else if (game.phase === 'auction' && game.auction) {
     key = 'auction'; html = auctionHTML(); cls = 'felt';
-  } else if (game.trade && (!net.role || game.trade.from === net.myPid || game.trade.to === net.myPid) && (!game.trade.postponed || ui.reviewingTrade)) {
+  } else if (game.trade && (
+      isBackendAuthoritativeGame()
+        ? (backendPlayerMine(game.trade.from) || backendPlayerMine(game.trade.to))
+        : (!net.role || game.trade.from === net.myPid || game.trade.to === net.myPid)
+    ) && (!game.trade.postponed || ui.reviewingTrade)) {
     // Only the two people involved ever see this dialog: the proposer
     // while they're still picking a partner or building the offer
     // (game.trade.to isn't set yet at that point, so nobody else's
@@ -4022,14 +4050,49 @@ function act(name, ...args) {
   if (isBackendAuthoritativeGame()) {
     if (name === 'rollDice') return rollDice();
     if (name === 'closeCard') { closeCard(args[0]); return; }
+
+    // These only edit this browser's private trade draft/view. They must
+    // never touch PeerJS or mutate the authoritative server state directly.
+    if (name === 'openTrade' || name === 'setTradePartner' || name === 'tradeBack') {
+      const fn = window[name];
+      if (typeof fn === 'function') return fn(...args);
+      return;
+    }
+    if (name === 'cancelTrade' && game?.trade && ['pick', 'edit'].includes(game.trade.stage) &&
+        !window.authoritativeGame?.state?.trade) {
+      game.trade = null;
+      ui.reviewingTrade = false;
+      render();
+      return;
+    }
+
     const action = authoritativeActionSpec(name, args);
     if (action) return submitAuthoritativeGameplayAction(name, action);
+    notify('That action is not available in server multiplayer yet.');
+    return;
   }
   const pid = net.role === 'guest' ? net.myPid : (net.role === 'host' ? net.myPid : (game ? expectedActorId(name) : 0));
   if (net.role === 'guest') { netSendToHost({ t: 'act', name, args, pid }); return; }
   hostRun(name, args, pid);
 }
 function actProposeTrade() {
+  if (isBackendAuthoritativeGame()) {
+    const t = game && game.trade;
+    if (!t || !backendPlayerMine(t.from)) return;
+    return submitAuthoritativeGameplayAction('proposeTrade', {
+      type: 'PROPOSE_TRADE',
+      trade: {
+        from: t.from,
+        to: t.to,
+        give: Array.isArray(t.give) ? t.give.slice() : [],
+        get: Array.isArray(t.get) ? t.get.slice() : [],
+        giveCash: Number(t.giveCash) || 0,
+        getCash: Number(t.getCash) || 0,
+        stage: 'edit',
+        error: '',
+      },
+    });
+  }
   const pid = net.role === 'guest' ? net.myPid : (net.role === 'host' ? net.myPid : (game ? expectedActorId('proposeTrade') : 0));
   if (net.role === 'guest') { netSendToHost({ t: 'act', name: 'proposeTrade', args: [], pid, trade: game.trade }); return; }
   hostRun('proposeTrade', [], pid, { trade: game.trade });
@@ -4564,7 +4627,7 @@ async function backendOpenGame(gameId) {
   if (!gameId) return;
   setup.screen = 'serverLobby';
   await backendRefreshLobby(gameId);
-  if (backendLobby?.game?.status === 'WAITING') {
+  if (['WAITING', 'PAUSED'].includes(backendLobby?.game?.status)) {
     startBackendLobbyPolling(gameId);
   }
   renderSetup();
@@ -4759,7 +4822,7 @@ async function backendStartGame(gameId) {
         version: result.version || 1,
         status: result.status || 'ACTIVE',
         state: result.state || null,
-        events: [],
+        events: Array.isArray(result.events) ? result.events : [],
       });
     }
     await refreshBackendMyGames();
