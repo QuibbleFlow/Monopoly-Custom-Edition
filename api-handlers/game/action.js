@@ -42,6 +42,7 @@ function parseStoredResult(value) {
 }
 
 const COMPLETED_TRADE_VIEW_MS = 10 * 1000;
+const ACTION_TIMER_MS = 75 * 1000;
 
 function redactTradeState(state, accountId) {
   const copy = engine.cloneState(state);
@@ -119,9 +120,14 @@ function resolveRollSequence(initialState, initialEvents, playerId, spaces, rand
     if (completionError) return completionError;
   }
 
-  if (!state.debt && !state.auction && !state.over && state.phase === 'after') {
-    const turnError = apply({ type: 'END_TURN', playerId });
-    if (turnError) return turnError;
+  // Match the original game flow: finishing movement does NOT automatically
+  // end a normal turn. The player keeps the after-roll window for managing
+  // properties, trading, and pressing End turn. A doubles roll stays in the
+  // roll phase for the extra roll. The 75-second action window starts here,
+  // just like endOfMovePipeline() did in the original client-authoritative flow.
+  if (!state.over) {
+    const timerError = apply({ type: 'START_TRADE_TIMER', now: Date.now(), durationMs: ACTION_TIMER_MS });
+    if (timerError) return timerError;
   }
 
   return { state, events };
@@ -244,6 +250,12 @@ async function executeGameAction({
       }
 
       const requestAction = { ...action, playerId: action.playerId == null ? actingPlayer.id : Number(action.playerId) };
+      if (requestAction.type === 'GAME_TICK') {
+        // Browser clocks and blocked flags are presentation details, not authority.
+        // Use server time so a modified client cannot stretch or shorten a turn.
+        requestAction.now = Date.now();
+        requestAction.blocked = false;
+      }
       if (requestAction.type === 'ACCEPT_TRADE') {
         requestAction.now = Date.now();
         requestAction.viewTradeMs = COMPLETED_TRADE_VIEW_MS;
@@ -257,7 +269,9 @@ async function executeGameAction({
         requestAction.dice = [first, second];
       }
 
-      const legal = engine.legalActions(state, spaces).some(candidate => candidate.type === requestAction.type && candidate.playerId === requestAction.playerId);
+      const isHostSystemAction = requestAction.type === 'GAME_TICK' && game.host_account_id === account.id;
+      const legal = isHostSystemAction || engine.legalActions(state, spaces)
+        .some(candidate => candidate.type === requestAction.type && candidate.playerId === requestAction.playerId);
       if (!legal) {
         return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'That action is not legal in the current game state.' } };
       }
