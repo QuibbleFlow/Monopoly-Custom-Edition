@@ -88,6 +88,7 @@ CREATE INDEX IF NOT EXISTS game_action_requests_game_created_idx
 CREATE TABLE IF NOT EXISTS games (
   id TEXT PRIMARY KEY,
   host_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT 'Server game' CHECK (char_length(name) BETWEEN 1 AND 80),
   status TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN ('WAITING', 'ACTIVE', 'PAUSED', 'FINISHED')),
   invite_only BOOLEAN NOT NULL DEFAULT FALSE,
   selected_board_id UUID,
