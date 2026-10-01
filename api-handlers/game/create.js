@@ -20,6 +20,7 @@ module.exports = async function createGameRoute(req, res) {
       account,
       selectedBoardId: body.selectedBoardId || body.selected_board_id || null,
       inviteOnly: body.inviteOnly !== false,
+      name: body.name || 'Server game',
       db: sql,
     });
 
