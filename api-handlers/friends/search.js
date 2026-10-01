@@ -13,19 +13,23 @@ module.exports = async function searchFriends(req, res) {
         SELECT 1 FROM account_sessions s
         WHERE s.account_id = a.id AND s.expires_at > now()
           AND s.last_seen_at > now() - interval '2 minutes'
-      ) AS online
+      ) AS online,
+      r.id AS request_id,
+      CASE
+        WHEN r.id IS NULL THEN NULL
+        WHEN r.sender_id = ${account.id} THEN 'outgoing'
+        ELSE 'incoming'
+      END AS request_direction
       FROM accounts a
+      LEFT JOIN friend_requests r
+        ON r.status = 'pending'
+       AND LEAST(r.sender_id, r.recipient_id) = LEAST(a.id, ${account.id}::uuid)
+       AND GREATEST(r.sender_id, r.recipient_id) = GREATEST(a.id, ${account.id}::uuid)
       WHERE a.id <> ${account.id} AND a.username ILIKE ${query + '%'}
         AND NOT EXISTS (
           SELECT 1 FROM friendships f
           WHERE f.account_low = LEAST(a.id, ${account.id}::uuid)
             AND f.account_high = GREATEST(a.id, ${account.id}::uuid)
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM friend_requests r
-          WHERE r.status = 'pending'
-            AND LEAST(r.sender_id, r.recipient_id) = LEAST(a.id, ${account.id}::uuid)
-            AND GREATEST(r.sender_id, r.recipient_id) = GREATEST(a.id, ${account.id}::uuid)
         )
       ORDER BY lower(a.username) LIMIT 25`;
     return res.status(200).json({ users: rows });
