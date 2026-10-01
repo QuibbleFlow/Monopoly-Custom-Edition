@@ -53,8 +53,9 @@ test('four invited accounts start, pause, return to original seats, resume the s
   assert.deepEqual(db.state.players.map(player => player.account_id), ids.slice(0, 4));
   assert.deepEqual(db.state.players.map(player => player.seat_index), [0, 1, 2, 3]);
 
+  const firstPlayer = started.state.players[started.state.turnOrder[started.state.current]];
   const action = await executeGameAction({
-    account: { id: ids[0] }, gameId: created.gameId,
+    account: { id: firstPlayer.accountId }, gameId: created.gameId,
     action: { type: 'ROLL_DICE' }, version: 1, requestId: 'flow-roll', sql: db,
     random: () => 0.2,
   });
