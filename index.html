@@ -1223,6 +1223,8 @@ let authoritativeAppliedGameId = null;
 let lastAuthoritativeDiceEvent = '';
 let backendLobbyPollId = null;
 let backendLobbyPollInFlight = false;
+let authoritativeShowStartIntroGameId = null;
+const authoritativeStartIntroShown = new Set();
 function isBackendAuthoritativeGame() {
   const sync = window.authoritativeGame;
   return !!(sync && sync.gameId && sync.status === 'ACTIVE');
@@ -4259,6 +4261,18 @@ if (window.authoritativeGame) {
     if (isNewGame) attachGame();
     else render();
 
+    // A fresh server match uses the same player-order reveal as local play.
+    // The order itself was selected once by the server and lives in the
+    // authoritative state, so every account reveals the same order.
+    if (authoritativeShowStartIntroGameId === snapshot.gameId && !authoritativeStartIntroShown.has(snapshot.gameId)) {
+      authoritativeStartIntroShown.add(snapshot.gameId);
+      authoritativeShowStartIntroGameId = null;
+      const introOrder = Array.isArray(game.turnOrder) ? game.turnOrder.slice() : game.players.map(player => player.id);
+      const introNames = game.players.map(player => player.name);
+      const introColors = game.players.map(player => player.color);
+      await orderIntro(introOrder, introNames, introColors);
+    }
+
     if (game.over && snapshot.gameId) fetchBackendFinalResults(snapshot.gameId);
 
     const roll = snapshot.events.find(event => event.type === 'DICE_ROLLED');
@@ -4449,12 +4463,13 @@ async function backendResumeGame(gameId) {
       body: JSON.stringify({ gameId }),
     });
     if (window.authoritativeGame) {
+      authoritativeShowStartIntroGameId = result.gameId;
       await activateBackendGame({
         gameId: result.gameId,
         version: result.version || 1,
         status: result.status || 'ACTIVE',
         state: result.state || null,
-        events: [],
+        events: Array.isArray(result.events) ? result.events : [],
       });
     }
     await refreshBackendMyGames();
@@ -4477,7 +4492,7 @@ function startBackendLobbyPolling(gameId) {
   backendLobbyPollId = setInterval(() => {
     if (document.visibilityState === 'hidden' || backendLobbyPollInFlight || !backendLobby || backendLobby.gameId !== gameId) return;
     backendRefreshLobby(gameId, { fromPoll: true });
-  }, 4000);
+  }, 1000);
 }
 
 async function activateBackendGame(payload) {
@@ -4682,6 +4697,7 @@ async function backendRefreshLobby(gameId, options = {}) {
     };
     const status = result.status || result.game?.status;
     if (status === 'ACTIVE') {
+      authoritativeShowStartIntroGameId = result.gameId;
       stopBackendLobbyPolling();
       if (window.authoritativeGame.gameId && window.authoritativeGame.gameId !== result.gameId) {
         await window.authoritativeGame.clearAuthoritativeState();
