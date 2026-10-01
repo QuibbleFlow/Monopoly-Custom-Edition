@@ -49,6 +49,21 @@ test('joining a waiting lobby adds a deterministic seat and rejects duplicates o
   assert.equal(invalid.error.code, 'INVALID_GAME_ID');
 });
 
+test('a waiting lobby supports up to eight seats and rejects the ninth player', async () => {
+  const db = makeDb();
+  const created = await createGame({ account: { id: 'account-a' }, db });
+
+  for (const id of ['account-b', 'account-c', 'account-d', 'account-e', 'account-f', 'account-g', 'account-h']) {
+    const result = await joinGame({ account: { id }, gameId: created.gameId, db });
+    assert.equal(result.ok, true, `expected ${id} to join the lobby`);
+  }
+
+  const full = await joinGame({ account: { id: 'account-i' }, gameId: created.gameId, db });
+  assert.equal(full.ok, false);
+  assert.equal(full.error.code, 'GAME_FULL');
+  assert.equal(db.state.players.filter(player => player.game_id === created.gameId).length, 8);
+});
+
 test('a member can leave and a host transfer or cleanup remains deterministic', async () => {
   const db = makeDb();
   const created = await createGame({ account: { id: 'account-a' }, db });

@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS game_players (
   returned_at TIMESTAMPTZ,
   PRIMARY KEY (game_id, account_id),
   UNIQUE (game_id, seat_index),
-  CHECK (seat_index < 4)
+  CHECK (seat_index < 8)
 );
 
 CREATE INDEX IF NOT EXISTS game_players_account_idx
