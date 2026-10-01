@@ -245,7 +245,8 @@ async function executeGameAction({
         : state.debt
           ? state.debt.pid
           : current && current.id;
-      if (expectedActorId == null || expectedActorId !== actingPlayer.id) {
+      const hostSystemAction = action.type === 'GAME_TICK' && game.host_account_id === account.id;
+      if (!hostSystemAction && (expectedActorId == null || expectedActorId !== actingPlayer.id)) {
         return { ok: false, error: { code: 'NOT_YOUR_TURN', message: 'It is not this player\'s turn.' } };
       }
 
@@ -269,8 +270,7 @@ async function executeGameAction({
         requestAction.dice = [first, second];
       }
 
-      const isHostSystemAction = requestAction.type === 'GAME_TICK' && game.host_account_id === account.id;
-      const legal = isHostSystemAction || engine.legalActions(state, spaces)
+      const legal = hostSystemAction || engine.legalActions(state, spaces)
         .some(candidate => candidate.type === requestAction.type && candidate.playerId === requestAction.playerId);
       if (!legal) {
         return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'That action is not legal in the current game state.' } };
