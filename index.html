@@ -3412,7 +3412,9 @@ function updateModal() {
   let key = '', html = '', cls = '', extra = '';
   if (popup) {
     key = 'card';
-    const mine = !net.role || (game && cur().id === net.myPid);
+    const mine = isBackendAuthoritativeGame()
+      ? (popup.playerId == null || backendPlayerMine(popup.playerId))
+      : (!net.role || (game && cur().id === net.myPid));
     html = `<div style="background:#f7e6c8;color:#2a1c05;border:2px solid #2a1c05;border-radius:10px;padding:24px 16px;text-align:center;animation:dlg calc(.4s * var(--k)) ease-out">
       <h2 style="color:#b23a00;font-family:var(--font);font-weight:800">${esc(popup.label)}</h2>
       <p style="font-size:1.15rem;font-weight:700;margin:0 0 12px">${esc(popup.text)}</p>
