@@ -4324,49 +4324,102 @@ if (window.authoritativeGame) {
       return;
     }
 
+    const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+    const roll = events.find(event => event.type === 'DICE_ROLLED');
+    const eventKey = `${snapshot.gameId}:${snapshot.version}`;
+    const shouldPresentRoll = !!roll && eventKey !== lastAuthoritativeDiceEvent;
     const isNewGame = authoritativeAppliedGameId !== snapshot.gameId || !$('board');
-    game = MonopolyGameEngine.deserializeState(snapshot.state);
-    game.rev = snapshot.version;
-    authoritativeAppliedGameId = snapshot.gameId;
+    const finalGame = MonopolyGameEngine.deserializeState(snapshot.state);
+    finalGame.rev = snapshot.version;
+
     if (authoritativeRollRequest && !authoritativeRollInFlight && snapshot.version > authoritativeRollRequest.expectedVersion) {
       authoritativeRollRequest = null;
     }
-    if (isNewGame) attachGame();
-    else render();
+
+    // For a roll, keep the PREVIOUS visual state on screen while dice and
+    // token movement play. The server has already settled the authoritative
+    // result, but showing the final money/property/position before the dice
+    // finish is what made server multiplayer look like it was fast-forwarding.
+    // New/reconnected clients do not have an earlier visual state, so they
+    // adopt the current snapshot immediately instead of inventing an animation.
+    if (!shouldPresentRoll || isNewGame || !game) {
+      game = finalGame;
+      authoritativeAppliedGameId = snapshot.gameId;
+      if (isNewGame) attachGame();
+      else render();
+    } else {
+      authoritativeAppliedGameId = snapshot.gameId;
+    }
 
     // A fresh server match uses the same player-order reveal as local play.
-    // The order itself was selected once by the server and lives in the
-    // authoritative state, so every account reveals the same order.
+    // The order is selected once by the authoritative server.
     if (authoritativeShowStartIntroGameId === snapshot.gameId && !authoritativeStartIntroShown.has(snapshot.gameId)) {
       authoritativeStartIntroShown.add(snapshot.gameId);
       authoritativeShowStartIntroGameId = null;
-      const introOrder = Array.isArray(game.turnOrder) ? game.turnOrder.slice() : game.players.map(player => player.id);
-      const introNames = game.players.map(player => player.name);
-      const introColors = game.players.map(player => player.color);
+      const introSource = shouldPresentRoll && !isNewGame ? finalGame : game;
+      const introOrder = Array.isArray(introSource.turnOrder) ? introSource.turnOrder.slice() : introSource.players.map(player => player.id);
+      const introNames = introSource.players.map(player => player.name);
+      const introColors = introSource.players.map(player => player.color);
       await orderIntro(introOrder, introNames, introColors);
     }
 
-    if (game.over && snapshot.gameId) fetchBackendFinalResults(snapshot.gameId);
+    if (finalGame.over && snapshot.gameId) fetchBackendFinalResults(snapshot.gameId);
 
-    const roll = snapshot.events.find(event => event.type === 'DICE_ROLLED');
-    const eventKey = `${snapshot.gameId}:${snapshot.version}`;
-    if (!roll || eventKey === lastAuthoritativeDiceEvent) return;
-    lastAuthoritativeDiceEvent = eventKey;
-    const wasBusy = busy;
-    if (!wasBusy) busy = true;
-    render();
-    beginMovementCamera();
-    moveCameraReset(T(400));
-    await animateDice(roll.dice[0], roll.dice[1]);
-    const player = game.players[roll.playerId];
-    if (player) log(`${player.name} rolled ${roll.dice[0]} + ${roll.dice[1]}${roll.isDouble ? ' (doubles)' : ''}.`);
-    await presentAuthoritativeTurnEvents(snapshot.events, roll.playerId);
-    if (!wasBusy) {
-      busy = false;
+    if (shouldPresentRoll && !isNewGame && game) {
+      lastAuthoritativeDiceEvent = eventKey;
+      const wasBusy = busy;
+      busy = true;
+      render();
+      beginMovementCamera();
+      moveCameraReset(T(400));
+      await animateDice(roll.dice[0], roll.dice[1]);
+      const player = game.players[roll.playerId] || finalGame.players[roll.playerId];
+      if (player) log(`${player.name} rolled ${roll.dice[0]} + ${roll.dice[1]}${roll.isDouble ? ' (doubles)' : ''}.`);
+      await presentAuthoritativeTurnEvents(events, roll.playerId);
+
+      // Apply the settled snapshot only AFTER the presentation finishes.
+      game = finalGame;
+      authoritativeAppliedGameId = snapshot.gameId;
+      if (!wasBusy) busy = false;
       finishMovementCamera(T(600));
       render();
+      return;
     }
+
+    // Non-roll actions still need the same feedback the old multiplayer
+    // path showed, even though the server has already applied their state.
+    if (events.length) presentAuthoritativeActionEvents(events);
   });
+}
+
+let authoritativeCardPresentationId = 1000000;
+
+async function presentAuthoritativeCard(event) {
+  const label = event.deck === 'chance' ? 'Chance' : 'Community Chest';
+  const id = ++authoritativeCardPresentationId;
+  popup = {
+    label,
+    text: event.text || label,
+    id,
+    playerId: event.playerId,
+    serverPresentation: true,
+  };
+  sfx.card();
+  render();
+
+  let timer = null;
+  const clicked = new Promise(resolve => {
+    cardCloseWaiters[id] = () => resolve('clicked');
+  });
+  const timed = new Promise(resolve => {
+    timer = setTimeout(() => resolve('timeout'), T(2200));
+  });
+  await Promise.race([clicked, timed]);
+  if (timer) clearTimeout(timer);
+  delete cardCloseWaiters[id];
+  delete cardCloseFlags[id];
+  if (popup && popup.id === id) popup = null;
+  render();
 }
 
 async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
@@ -4375,14 +4428,25 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
     moveCameraFocus(tokenPos[rollingPlayerId] ?? moves[0].from, T(400), 'follow');
     await sleep(T(200));
   }
-  const stepDuration = stepTime(moves.length || 1);
+
+  // Movement is split into segments. A dice move of 3 and a later card
+  // move of 12 must each use the same pacing they use in local play.
+  // Using the total number of PLAYER_MOVED events made chained server
+  // animations run far too quickly.
+  let stepDuration = stepTime(1);
+  let landingLogged = false;
   const landingTypes = new Set([
     'PROPERTY_AVAILABLE', 'NO_RENT_MORTGAGED', 'RENT_DUE', 'LANDING_OWN_PROPERTY',
     'TAX_DUE', 'LANDING_GO_TO_JAIL', 'LANDING_NO_EFFECT', 'CARD_DRAW_REQUESTED',
   ]);
-  let landingLogged = false;
 
   for (const event of events) {
+    if (event.type === 'MOVE_REQUESTED' || event.type === 'CARD_MOVEMENT_REQUESTED') {
+      stepDuration = stepTime(Math.max(1, Number(event.steps) || 1));
+      landingLogged = false;
+      continue;
+    }
+
     if (event.type === 'PLAYER_MOVED') {
       const player = game.players[event.playerId];
       if (!player) continue;
@@ -4415,6 +4479,8 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
       } else if (event.type === 'LANDING_OWN_PROPERTY' && player) log(`${player.name} owns this one already.`);
       else if (event.type === 'TAX_DUE' && player) log(`${player.name} pays ${fmt(event.amount)} in tax.`);
       else if (event.type === 'LANDING_GO_TO_JAIL' && player) log(`${player.name} goes to jail.`);
+    } else if (event.type === 'CARD_DRAWN') {
+      await presentAuthoritativeCard(event);
     } else if (event.type === 'THREE_DOUBLES_JAIL') {
       const player = game.players[event.playerId];
       if (player) log(`Three doubles in a row. ${player.name} goes to jail.`);
@@ -4438,6 +4504,80 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
     }
   }
 
+  presentPaymentEvents(events);
+  render();
+}
+
+function presentAuthoritativeActionEvents(events) {
+  for (const event of events) {
+    const player = event.playerId == null ? null : game.players[event.playerId];
+    switch (event.type) {
+      case 'PROPERTY_PURCHASED':
+        if (player) log(`${player.name} bought ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+        break;
+      case 'HOUSE_BUILT':
+        if (player) log(`${player.name} built on ${spaceLabel(event.position)}.`);
+        break;
+      case 'HOUSE_SOLD':
+        if (player) log(`${player.name} sold a house on ${spaceLabel(event.position)}.`);
+        break;
+      case 'PROPERTY_MORTGAGED':
+        if (player) log(`${player.name} mortgaged ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+        break;
+      case 'PROPERTY_UNMORTGAGED':
+        if (player) log(`${player.name} unmortgaged ${spaceLabel(event.position)}.`);
+        break;
+      case 'JAIL_FINE_PAID':
+        if (player) log(`${player.name} paid ${fmt(event.amount)} and left jail.`);
+        break;
+      case 'AUCTION_STARTED':
+        log(`Auction started for ${spaceLabel(event.position)}.`);
+        break;
+      case 'AUCTION_BID_PLACED':
+        if (player) log(`${player.name} bids ${fmt(event.amount)} for ${spaceLabel(event.position)}.`);
+        break;
+      case 'AUCTION_PLAYER_FOLDED':
+        if (player) log(`${player.name} folds.`);
+        break;
+      case 'AUCTION_ENDED':
+        if (event.winnerId == null) log(`Nobody bid. ${spaceLabel(event.position)} stays with the bank.`);
+        else if (game.players[event.winnerId]) log(`${game.players[event.winnerId].name} won ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+        break;
+      case 'DEBT_PAID':
+        if (player) log(`${player.name} paid the ${fmt(event.amount)} debt.`);
+        break;
+      case 'PLAYER_BANKRUPT':
+        if (player) log(`${player.name} went bankrupt.`);
+        break;
+      case 'TRADE_PROPOSED':
+        if (game.players[event.from] && game.players[event.to]) log(`${game.players[event.from].name} sent a trade to ${game.players[event.to].name}.`);
+        break;
+      case 'TRADE_DECLINED':
+        if (game.players[event.to]) log(`${game.players[event.to].name} declined the trade.`);
+        break;
+      case 'TRADE_POSTPONED':
+        if (game.players[event.to]) log(`${game.players[event.to].name} postponed the trade.`);
+        break;
+      case 'TRADE_CANCELLED':
+        if (game.players[event.from]) log(`${game.players[event.from].name} cancelled the trade.`);
+        break;
+      case 'TRADE_COMPLETED':
+        log('Trade completed.');
+        break;
+      case 'DOUBLES_AGAIN':
+        log('Doubles. Roll again.');
+        break;
+      case 'TURN_CHANGED': {
+        const nextPlayer = game.players[event.playerId];
+        if (nextPlayer) log(`${nextPlayer.name}'s turn.`);
+        break;
+      }
+      case 'ACTION_TIMER_EXPIRED':
+        if (event.blocked) break;
+        if (game.phase === 'auction') log('Time expired. Auction time.');
+        break;
+    }
+  }
   presentPaymentEvents(events);
   render();
 }
