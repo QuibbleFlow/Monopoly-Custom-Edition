@@ -2002,8 +2002,40 @@ function setDice(a, b) {
   if (c0) c0.style.transform = dicePose(a, 0);
   if (c1) c1.style.transform = dicePose(b, 0);
 }
+let serverPendingDiceAnimations = [];
+
+function stopServerPendingDiceAnimation() {
+  serverPendingDiceAnimations.forEach(animation => {
+    try { animation.cancel(); } catch (error) {}
+  });
+  serverPendingDiceAnimations = [];
+}
+
+function startServerPendingDiceAnimation() {
+  stopServerPendingDiceAnimation();
+  if (reduceMotion) return;
+  const cubes = [$('cube0'), $('cube1')].filter(Boolean);
+  const diceWrap = $('dice');
+  if (!cubes.length || !diceWrap || typeof cubes[0].animate !== 'function') return;
+
+  cubes.forEach((cube, index) => {
+    const direction = index ? -1 : 1;
+    serverPendingDiceAnimations.push(cube.animate([
+      { transform: 'rotateX(0deg) rotateY(0deg) rotateZ(0deg)' },
+      { transform: `rotateX(${180 * direction}deg) rotateY(${240 * direction}deg) rotateZ(${40 * direction}deg)` },
+      { transform: `rotateX(${360 * direction}deg) rotateY(${480 * direction}deg) rotateZ(${80 * direction}deg)` },
+    ], { duration: T(520), iterations: Infinity, easing: 'linear' }));
+  });
+  serverPendingDiceAnimations.push(diceWrap.animate([
+    { transform: 'translate(0, 0) scale(1)' },
+    { transform: 'translate(0, -8%) scale(1.04)' },
+    { transform: 'translate(0, 0) scale(1)' },
+  ], { duration: T(300), iterations: Infinity, easing: 'ease-in-out' }));
+}
+
 // Throw the dice onto the board, tumble, and land on the real numbers.
 async function animateDice(a, b) {
+  stopServerPendingDiceAnimation();
   const c = [$('cube0'), $('cube1')], vals = [a, b];
   const dur = T(1000);
   const canAnimate = !reduceMotion && c[0] && typeof c[0].animate === 'function';
@@ -2239,6 +2271,10 @@ async function submitAuthoritativeRoll() {
   busy = true;
   ui.notice = '';
   render();
+  // Start a result-agnostic tumble immediately. The authoritative server
+  // still chooses the dice, but the click no longer feels frozen during
+  // the network round trip.
+  startServerPendingDiceAnimation();
   try {
     await sync.submitGameAction({
       gameId: authoritativeRollRequest.gameId,
@@ -2266,6 +2302,7 @@ async function submitAuthoritativeRoll() {
       ui.notice = error.message || 'The roll could not be submitted.';
     }
   } finally {
+    stopServerPendingDiceAnimation();
     authoritativeRollInFlight = false;
     busy = false;
     finishMovementCamera(T(600));
