@@ -164,15 +164,22 @@ function makeDb(initial = makeDbState()) {
       }));
     }
     if (query.startsWith('INSERT INTO games')) {
+      const hasName = query.includes('host_account_id, name, status');
       const hasInviteOnly = query.includes('invite_only');
-      const selectedBoardIndex = hasInviteOnly ? 4 : 3;
+      let cursor = 2;
+      const name = hasName ? values[cursor++] : 'Server game';
+      const status = values[cursor++];
+      const inviteOnly = hasInviteOnly ? !!values[cursor++] : false;
+      const selectedBoardId = values[cursor++] || null;
+      const resumeSaveId = query.includes('resume_save_id') ? (values[cursor++] || null) : null;
       state.games.push({
         id: values[0],
         host_account_id: values[1],
-        status: values[2],
-        invite_only: hasInviteOnly ? !!values[3] : false,
-        selected_board_id: values[selectedBoardIndex] || null,
-        resume_save_id: values[selectedBoardIndex + 1] || null,
+        name,
+        status,
+        invite_only: inviteOnly,
+        selected_board_id: selectedBoardId,
+        resume_save_id: resumeSaveId,
         created_at: new Date().toISOString(),
         started_at: null,
         paused_at: null,
