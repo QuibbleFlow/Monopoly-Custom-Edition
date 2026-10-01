@@ -4576,6 +4576,30 @@ async function backendRejoinPausedGame(gameId) {
   }
 }
 
+async function backendRenameGame(gameId, currentName) {
+  if (!gameId) return;
+  const nextName = window.prompt('Server game name:', currentName || 'Server game');
+  if (nextName == null) return;
+  const name = nextName.trim();
+  if (!name || name.length > 80) {
+    backendSocialError = 'Enter a server game name between 1 and 80 characters.';
+    renderSetup();
+    return;
+  }
+  try {
+    await backendGameRequest('/api/game/rename', {
+      method: 'PATCH',
+      body: JSON.stringify({ gameId, name }),
+    });
+    if (backendLobby?.gameId === gameId && backendLobby.game) backendLobby.game.name = name;
+    await refreshBackendMyGames();
+    backendSocialError = 'Server game renamed.';
+  } catch (error) {
+    backendSocialError = error.message;
+  }
+  renderSetup();
+}
+
 async function backendDeleteGame(gameId) {
   if (!gameId || !window.confirm('Delete this server game and its stored multiplayer records? This cannot be undone.')) return;
   try {
@@ -4811,9 +4835,10 @@ function renderServerLobbySetup() {
         const openAction = statusTag === 'PAUSED'
           ? `<button class="btn" onclick="backendRejoinPausedGame('${esc(gameId)}')">Rejoin</button>`
           : `<button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">${statusTag === 'ACTIVE' ? 'Continue' : 'Open'}</button>`;
-        return `<div class="social-row"><span class="social-name">Server game</span>
+        return `<div class="social-row"><span class="social-name">${esc(game.name || 'Server game')}</span>
           <span class="tag">${statusTag}</span>${openAction}
-          ${game.isHost ? `<button class="btn alt" onclick="backendDeleteGame('${esc(gameId)}')">Delete</button>` : ''}
+          ${game.isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(gameId)}','${esc(game.name || 'Server game')}')">Rename</button>
+          <button class="btn alt" onclick="backendDeleteGame('${esc(gameId)}')">Delete</button>` : ''}
         </div>`;
       }).join('')}
     </div>` : '';
@@ -4846,8 +4871,9 @@ function renderServerJoinSetup() {
     const action = status === 'PAUSED'
       ? `<button class="btn" onclick="backendRejoinPausedGame('${esc(gameId)}')">Rejoin</button>`
       : `<button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">${status === 'ACTIVE' ? 'Continue' : 'Open'}</button>`;
-    return `<div class="social-row"><span class="social-name">Server game</span>
-      <span class="tag">${status}</span>${action}</div>`;
+    return `<div class="social-row"><span class="social-name">${esc(game.name || 'Server game')}</span>
+      <span class="tag">${status}</span>${action}
+      ${game.isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(gameId)}','${esc(game.name || 'Server game')}')">Rename</button>` : ''}</div>`;
   }).join('');
 
   $('app').innerHTML = `<div class="setup">
