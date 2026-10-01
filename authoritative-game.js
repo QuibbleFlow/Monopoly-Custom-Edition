@@ -8,7 +8,7 @@
   const requestTimeout = deps.setTimeout || root.setTimeout?.bind(root) || setTimeout;
   const clearRequestTimeout = deps.clearTimeout || root.clearTimeout?.bind(root) || clearTimeout;
   const stateListeners = new Set();
-  const pollInterval = deps.pollInterval || 2500;
+  const pollInterval = deps.pollInterval || 200;
   let requestCounter = 0;
   let pollingTimer = null;
   let pollingGameId = null;
