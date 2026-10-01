@@ -29,6 +29,7 @@ module.exports = async function startGameRoute(req, res) {
     status: result.status,
     version: result.version,
     state: result.state,
+    events: result.events || [],
     players: result.players,
   });
 };
