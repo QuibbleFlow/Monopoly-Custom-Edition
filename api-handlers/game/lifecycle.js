@@ -320,7 +320,18 @@ async function startGame({ account, gameId, db = database() }) {
 
     const names = players.map(player => player.username);
     const accountIds = players.map(player => player.account_id);
-    let state = engine.createState({ names, accountIds, boardSize: boardData.spaces.length, boardNames: {} });
+    let boardNames = {};
+    if (game.selected_board_id) {
+      const boards = await tx`SELECT property_names FROM custom_boards
+        WHERE id = ${game.selected_board_id} AND owner_id = ${game.host_account_id}`;
+      if (!boards[0]) {
+        return err('BOARD_NOT_FOUND', 'The selected custom board is no longer available to the host.', 409);
+      }
+      boardNames = boards[0].property_names && typeof boards[0].property_names === 'object'
+        ? boards[0].property_names
+        : {};
+    }
+    let state = engine.createState({ names, accountIds, boardSize: boardData.spaces.length, boardNames });
 
     // Match the original game's start flow, but choose the order on the
     // authoritative server so every browser receives the exact same result.
