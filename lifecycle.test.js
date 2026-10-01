@@ -348,6 +348,7 @@ test('state route enforces authentication and membership and returns matching ac
   const created = await createGame({ account: { id: 'account-a' }, db });
   await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
   await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  editStoredGameState(db, state => { state.turnOrder = [0, 1]; state.current = 0; });
   await executeGameAction({
     account: { id: 'account-a' },
     gameId: created.gameId,
@@ -398,6 +399,7 @@ test('stale versions are rejected and duplicate request IDs do not double execut
   const created = await createGame({ account: { id: 'account-a' }, db });
   await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
   await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  editStoredGameState(db, state => { state.turnOrder = [0, 1]; state.current = 0; });
 
   const stale = await executeGameAction({
     account: { id: 'account-a' },
@@ -476,7 +478,7 @@ test('a paused match rejects stale-client actions without changing its stored ve
   assert.equal(db.state.states[0].version, 1);
 });
 
-test('authoritative roll moves across GO, pays salary, advances turn, and increments one version', async () => {
+test('authoritative roll moves across GO, pays salary, preserves the after-roll window, and increments one version', async () => {
   const { db, gameId } = await createActiveGame();
   const state = engine.deserializeState(db.state.states[0].state);
   state.players[0].pos = 36;
@@ -493,14 +495,16 @@ test('authoritative roll moves across GO, pays salary, advances turn, and increm
   assert.deepEqual(result.state.dice, [1, 3]);
   assert.equal(result.state.players[0].pos, 0);
   assert.equal(result.state.players[0].money, 1700);
-  assert.equal(result.state.current, 1);
+  assert.equal(result.state.current, 0);
+  assert.equal(result.state.phase, 'after');
+  assert.ok(result.state.tradeTimerEnd, 'the normal post-roll action timer is running');
   assert.ok(result.events.some(event => event.type === 'GO_SALARY_COLLECTED' && event.amount === 200));
   assert.ok(result.events.some(event => event.type === 'LANDING_NO_EFFECT' && event.position === 0));
-  assert.ok(result.events.some(event => event.type === 'TURN_CHANGED' && event.playerId === 1));
+  assert.ok(!result.events.some(event => event.type === 'TURN_CHANGED'));
   assert.equal(db.state.states[0].version, 2);
 });
 
-test('authoritative landing resolves rent and taxes before advancing the turn', async () => {
+test('authoritative landing resolves rent and taxes before returning control to the player', async () => {
   const rentGame = await createActiveGame();
   const rentState = engine.deserializeState(rentGame.db.state.states[0].state);
   rentState.players[0].pos = 34;
@@ -517,7 +521,9 @@ test('authoritative landing resolves rent and taxes before advancing the turn', 
   assert.equal(rent.state.players[1].money, 1535);
   assert.ok(rent.events.some(event => event.type === 'RENT_DUE' && event.amount === 35));
   assert.ok(rent.events.some(event => event.type === 'PAYMENT_SETTLED' && event.creditorId === 1 && event.amount === 35));
-  assert.equal(rent.state.current, 1);
+  assert.equal(rent.state.current, 0);
+  assert.equal(rent.state.phase, 'after');
+  assert.ok(rent.state.tradeTimerEnd);
   assert.equal(rent.version, 2);
 
   const taxGame = await createActiveGame();
@@ -535,7 +541,9 @@ test('authoritative landing resolves rent and taxes before advancing the turn', 
   assert.equal(tax.state.players[0].money, 1400);
   assert.ok(tax.events.some(event => event.type === 'TAX_DUE' && event.amount === 100));
   assert.ok(tax.events.some(event => event.type === 'PAYMENT_SETTLED' && event.amount === 100));
-  assert.equal(tax.state.current, 1);
+  assert.equal(tax.state.current, 0);
+  assert.equal(tax.state.phase, 'after');
+  assert.ok(tax.state.tradeTimerEnd);
   assert.equal(tax.version, 2);
 });
 
@@ -570,9 +578,10 @@ test('authoritative doubles retain the turn and a third double sends the player 
 
   assert.equal(thirdDouble.state.players[0].pos, 10);
   assert.equal(thirdDouble.state.players[0].inJail, true);
-  assert.equal(thirdDouble.state.current, 1);
+  assert.equal(thirdDouble.state.current, 0);
+  assert.equal(thirdDouble.state.phase, 'after');
   assert.ok(thirdDouble.events.some(event => event.type === 'THREE_DOUBLES_JAIL'));
-  assert.ok(thirdDouble.events.some(event => event.type === 'TURN_CHANGED'));
+  assert.ok(!thirdDouble.events.some(event => event.type === 'TURN_CHANGED'));
   assert.equal(thirdDouble.version, 2);
 });
 
