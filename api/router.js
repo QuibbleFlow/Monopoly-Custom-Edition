@@ -29,6 +29,7 @@ const routes = {
     lobby: require('../api-handlers/game/lobby.js'),
     myGames: require('../api-handlers/game/my-games.js'),
     pause: require('../api-handlers/game/pause.js'),
+    rename: require('../api-handlers/game/rename.js'),
     results: require('../api-handlers/game/results.js'),
     resume: require('../api-handlers/game/resume.js'),
     saves: require('../api-handlers/game/saves.js'),
