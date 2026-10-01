@@ -3,9 +3,9 @@ const test = require('node:test');
 const engine = require('./game-engine.js');
 const boardData = require('./game-board.js');
 
-const { createGame, joinGame, startGame } = require('./api/game/lifecycle.js');
-const { executeGameAction } = require('./api/game/action.js');
-const { saveGame, listSaves, loadGame, resumeGame } = require('./api/game/saves.js');
+const { createGame, joinGame, startGame } = require('./api-handlers/game/lifecycle.js');
+const { executeGameAction } = require('./api-handlers/game/action.js');
+const { saveGame, listSaves, loadGame, resumeGame } = require('./api-handlers/game/saves.js');
 const { getFinalResults } = require('./lib/game-results.js');
 const { makeDb } = require('./test-support/mock-db.js');
 

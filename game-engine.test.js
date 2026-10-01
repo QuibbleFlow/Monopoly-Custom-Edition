@@ -444,7 +444,7 @@ test('final results rank the winner first and the rest by reverse bankruptcy ord
   assert.equal(engine.computeFinalResults(notOver, spaces), null);
 });
 
-const { handleGameAction, executeGameAction } = require('./api/game/action.js');
+const { handleGameAction, executeGameAction } = require('./api-handlers/game/action.js');
 
 function makeRes() {
   return {

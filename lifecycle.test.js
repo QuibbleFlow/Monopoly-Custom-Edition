@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const engine = require('./game-engine.js');
 
-const { createGame, joinGame, leaveGame, startGame, getLobby, getMyGames } = require('./api/game/lifecycle.js');
-const { getGameState, handleGetGameStateRoute } = require('./api/game/state.js');
-const { executeGameAction } = require('./api/game/action.js');
+const { createGame, joinGame, leaveGame, startGame, getLobby, getMyGames } = require('./api-handlers/game/lifecycle.js');
+const { getGameState, handleGetGameStateRoute } = require('./api-handlers/game/state.js');
+const { executeGameAction } = require('./api-handlers/game/action.js');
 const { makeDbState, makeDb } = require('./test-support/mock-db.js');
 
 async function createActiveGame() {
