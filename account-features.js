@@ -30,7 +30,7 @@ function openFriendsScreen() {
   clearInterval(friendsRefreshTimer);
   friendsRefreshTimer = setInterval(() => {
     if (setup.screen === 'friends') loadFriendsScreen();
-  }, 30000);
+  }, 5000);
 }
 
 function closeFriendsScreen() {
@@ -73,11 +73,16 @@ function renderFriendsScreen() {
     ${socialAvatar({ username: request.username, avatar_url: request.avatar_url })}
     <span class="social-name">${esc(request.username)}</span><span class="tag">request sent</span>
   </div>`).join('') || '<p class="muted">No sent requests.</p>';
-  const results = friendsScreenState.results.map(user => `<div class="social-row">
-    ${socialAvatar(user)}<span class="social-name">${esc(user.username)}</span>
-    <span class="tag">${user.online ? 'online' : 'offline'}</span>
-    <button class="btn" type="button" onclick="sendFriendRequest('${esc(user.username)}')">Add friend</button>
-  </div>`).join('') || (friendsScreenState.query ? '<p class="muted">No matching accounts.</p>' : '');
+  const results = friendsScreenState.results.map(user => {
+    let action = `<button class="btn" type="button" onclick="sendFriendRequest('${esc(user.username)}')">Add friend</button>`;
+    if (user.request_direction === 'outgoing') action = '<span class="tag">request sent</span>';
+    if (user.request_direction === 'incoming') action = `<button class="btn" type="button" onclick="decideFriendRequest('${esc(user.request_id)}','accept')">Accept request</button>`;
+    return `<div class="social-row">
+      ${socialAvatar(user)}<span class="social-name">${esc(user.username)}</span>
+      <span class="tag">${user.online ? 'online' : 'offline'}</span>
+      ${action}
+    </div>`;
+  }).join('') || (friendsScreenState.query ? '<p class="muted">No matching accounts.</p>' : '');
   $('app').innerHTML = `<div class="setup">
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
     <p class="sub">Friends</p>
@@ -114,6 +119,8 @@ async function sendFriendRequest(username) {
     friendsScreenState.results = friendsScreenState.results.filter(user => user.username !== username);
     friendsScreenState.status = `Request sent to ${username}.`;
   } catch (error) { friendsScreenState.status = error.message; }
+  friendsScreenState.query = '';
+  friendsScreenState.results = [];
   await loadFriendsScreen();
 }
 
@@ -122,6 +129,7 @@ async function decideFriendRequest(id, action) {
     await accountRequest(`/api/friends/requests/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action }) });
     friendsScreenState.status = action === 'accept' ? 'Friend request accepted.' : 'Friend request declined.';
   } catch (error) { friendsScreenState.status = error.message; }
+  friendsScreenState.results = [];
   await loadFriendsScreen();
 }
 
