@@ -1110,6 +1110,7 @@ button.board-preview-space.selected { outline: 3px solid var(--accent); outline-
 <script src="game-engine.js"></script>
 <script src="authoritative-game.js"></script>
 <script src="account-features.js"></script>
+<script src="server-lobby-ui.js"></script>
 <script>
 /* =====================================================================
    SECTION 1. GAME SETTINGS
@@ -1339,7 +1340,7 @@ const reduceMotion = false;
 // Remembers the previous screen so we can animate what changed
 let prevMoney = {}, prevOwners = null, prevHouses = null, modalKey = '';
 
-const setup = { count: 2, names: Array.from({ length: 8 }, (_, i) => `Player ${i + 1}`), screen: '' };
+const setup = { count: 2, names: [...MonopolyGameEngine.defaultPlayerNames], screen: '' };
 let selectedHostBoard = null;
 
 /* THE ONLINE RANDOMNESS SHIM
@@ -4346,6 +4347,16 @@ async function accountRequest(path, options = {}) {
 let backendLobby = null;
 let backendMyGames = [];
 let backendSaves = [];
+let backendJoinGameId = '';
+const backendLobbyController = ServerLobbyUI.createServerLobbyController({
+  request: backendGameRequest,
+  isSignedIn: () => !!accountUser,
+  setScreen: screen => { setup.screen = screen; },
+  setLobby: lobby => { backendLobby = lobby; },
+  startPolling: startBackendLobbyPolling,
+  refreshMyGames: refreshBackendMyGames,
+  render: renderSetup,
+});
 
 async function refreshBackendSaves() {
   if (!accountUser) { backendSaves = []; return; }
@@ -4370,6 +4381,7 @@ async function backendResumeFromSave(saveId) {
       method: 'POST',
       body: JSON.stringify({ saveId }),
     });
+    setup.screen = 'serverLobby';
     startBackendLobbyPolling(result.gameId);
     await backendRefreshLobby(result.gameId);
     await refreshBackendMyGames();
@@ -4457,59 +4469,38 @@ async function refreshBackendMyGames() {
   await refreshBackendSaves();
 }
 
-async function backendCreateGame() {
-  if (!accountUser) {
-    setAccountStatus('Sign in to create a server lobby.');
-    return;
-  }
-
-  if (window.__backendCreateGameInFlight) {
-    return;
-  }
-
-  window.__backendCreateGameInFlight = true;
-  setAccountStatus('Creating server lobby…');
-
-  try {
-    const result = await backendGameRequest('/api/game/create', {
-      method: 'POST',
-      body: JSON.stringify({ selectedBoardId: selectedHostBoard ? selectedHostBoard.id : null }),
-    });
-    backendLobby = {
-      gameId: result.gameId,
-      game: result.game || null,
-      players: Array.isArray(result.players) ? result.players : [],
-      canStart: !!result.canStart,
-    };
-    startBackendLobbyPolling(result.gameId);
-    await refreshBackendMyGames();
-    renderSetup();
-  } catch (error) {
-    setAccountStatus(error.message);
-  } finally {
-    window.__backendCreateGameInFlight = false;
-  }
+function backendCreateGame() {
+  backendLobby = null;
+  return backendLobbyController.create(selectedHostBoard ? selectedHostBoard.id : null);
 }
 
-async function backendJoinGame(gameId) {
+function backendJoinGame(gameId) {
+  backendJoinGameId = typeof gameId === 'string' ? gameId : '';
+  return backendLobbyController.join(backendJoinGameId);
+}
+
+function openServerJoin() {
+  backendJoinGameId = '';
+  backendLobbyController.openJoin();
+}
+
+function openServerLobby() {
+  setup.screen = 'serverLobby';
+  renderSetup();
+}
+
+function setBackendJoinGameId(gameId) {
+  backendJoinGameId = gameId;
+}
+
+async function backendOpenGame(gameId) {
   if (!gameId) return;
-  try {
-    const result = await backendGameRequest('/api/game/join', {
-      method: 'POST',
-      body: JSON.stringify({ gameId }),
-    });
-    backendLobby = {
-      gameId: result.gameId,
-      game: result.game || null,
-      players: Array.isArray(result.players) ? result.players : [],
-      canStart: false,
-    };
-    startBackendLobbyPolling(result.gameId);
-    await refreshBackendMyGames();
-    renderSetup();
-  } catch (error) {
-    setAccountStatus(error.message);
+  setup.screen = 'serverLobby';
+  await backendRefreshLobby(gameId);
+  if (backendLobby?.game?.status === 'WAITING') {
+    startBackendLobbyPolling(gameId);
   }
+  renderSetup();
 }
 
 async function backendRefreshLobby(gameId, options = {}) {
@@ -4537,8 +4528,7 @@ async function backendRefreshLobby(gameId, options = {}) {
   } catch (error) {
     if (!options.fromPoll) setAccountStatus(error.message);
   } finally {
-    if (options.fromPoll) backendLobbyPollInFlight = false;
-    else if (backendLobbyPollId) backendLobbyPollInFlight = false;
+    backendLobbyPollInFlight = false;
   }
 }
 
@@ -4606,6 +4596,83 @@ function backendLobbyPlayersHTML(players = [], title = 'Players', options = {}) 
     return `<div class="social-row">${socialAvatar({ username: name, avatar_url: avatar })}<span class="social-name">${esc(name)}</span>${statusTag}</div>`;
   }).join('');
   return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2>${rows}</div>`;
+}
+
+function renderServerLobbySetup() {
+  const lobby = backendLobby;
+  const isResumeLobby = !!(lobby && lobby.game && lobby.game.resumeSaveId);
+  const lobbyPanel = lobby && lobby.gameId ? `
+    <div class="panel acc-blue">
+      <h2>Server lobby${isResumeLobby ? ' (resuming a save)' : ''}</h2>
+      <p class="muted">Game ID: <strong>${esc(lobby.gameId)}</strong></p>
+      <div class="row">
+        <button class="btn alt" onclick="backendRefreshLobby('${esc(lobby.gameId)}')">Refresh</button>
+        <button class="btn alt" onclick="backendLeaveGame('${esc(lobby.gameId)}')">Leave lobby</button>
+        <button class="btn alt" onclick="openServerJoin()">Join another</button>
+      </div>
+      ${backendLobbyPlayersHTML(lobby.players, isResumeLobby ? 'Original players' : 'Server roster', { isResume: isResumeLobby })}
+      ${lobby.canStart
+        ? (isResumeLobby
+          ? `<button class="btn" onclick="backendResumeGame('${esc(lobby.gameId)}')">Resume game</button>`
+          : `<button class="btn" onclick="backendStartGame('${esc(lobby.gameId)}')">Start server lobby</button>`)
+        : (isResumeLobby ? '<p class="muted">Waiting for every original player to return.</p>' : '')}
+    </div>` : `
+    <div class="panel acc-blue">
+      <h2>Server lobby</h2>
+      ${backendLobbyController.inFlight
+        ? '<p class="muted" role="status">Creating server lobby…</p>'
+        : `<button class="btn" onclick="backendCreateGame()">Create server lobby</button>`}
+      ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
+    </div>`;
+  const gamesPanel = backendMyGames.length ? `
+    <div class="panel acc-yellow">
+      <h2>My server games</h2>
+      ${backendMyGames.map(game => {
+        const gameId = game.gameId || game.id;
+        return `<div class="social-row"><span class="social-name">${esc(gameId || 'Game')}</span>
+          <span class="tag">${esc(game.status || 'WAITING')}</span>
+          <button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">Open</button></div>`;
+      }).join('')}
+    </div>` : '';
+  const savesPanel = backendSaves.length ? `
+    <div class="panel acc-green">
+      <h2>Saved games</h2>
+      ${backendSaves.map(save => `<div class="social-row"><span class="social-name">${esc(save.name)}</span>
+        <span class="tag">${(save.players || []).length} players</span>
+        <button class="btn alt" onclick="backendResumeFromSave('${esc(save.saveId)}')">Resume</button></div>`).join('')}
+    </div>` : '';
+
+  $('app').innerHTML = `<div class="setup">
+    <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
+    <p class="sub">Server multiplayer</p>
+    ${!accountUser ? accountPanelHTML() : ''}
+    ${lobbyPanel}${gamesPanel}${savesPanel}
+    <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
+  </div>`;
+}
+
+function renderServerJoinSetup() {
+  const games = backendMyGames.map(game => {
+    const gameId = game.gameId || game.id;
+    return `<div class="social-row"><span class="social-name">${esc(gameId || 'Game')}</span>
+      <span class="tag">${esc(game.status || 'WAITING')}</span>
+      <button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">Open</button></div>`;
+  }).join('');
+
+  $('app').innerHTML = `<div class="setup">
+    <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
+    <p class="sub">Join a server game</p>
+    ${!accountUser ? accountPanelHTML() : ''}
+    <div class="panel acc-blue">
+      <label class="muted" for="serverGameId">Server game ID</label>
+      <input type="text" id="serverGameId" value="${esc(backendJoinGameId)}" autocomplete="off">
+      <button class="btn" ${backendLobbyController.inFlight || !accountUser ? 'disabled' : ''}
+        onclick="backendJoinGame(document.getElementById('serverGameId').value)">${backendLobbyController.inFlight ? 'Joining…' : 'Join server game'}</button>
+      ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
+    </div>
+    ${games ? `<div class="panel acc-yellow"><h2>My server games</h2>${games}</div>` : ''}
+    <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
+  </div>`;
 }
 
 function setAccountStatus(message) {
@@ -4900,6 +4967,8 @@ function howToPlayHTML() {
 function renderSetup() {
   if (setup.screen === 'host') { renderHostSetup(); return; }
   if (setup.screen === 'join') { renderJoinSetup(); return; }
+  if (setup.screen === 'serverLobby') { renderServerLobbySetup(); return; }
+  if (setup.screen === 'serverJoin') { renderServerJoinSetup(); return; }
   if (setup.screen === 'friends') { renderFriendsScreen(); return; }
   if (setup.screen === 'boards') { renderBoardsScreen(); return; }
   if (setup.screen === 'boardEditor') { renderBoardEditorScreen(); return; }
@@ -4939,8 +5008,9 @@ function renderSetup() {
       <div class="panel acc-red">
         <h2>🌐 Play online</h2>
         <div class="row">
-          <button class="btn" onclick="backendCreateGame();">Create game</button>
-          <button class="btn alt" onclick="setup.screen='serverJoin'; renderSetup();">Join game</button>
+          <button class="btn" onclick="backendCreateGame()">Create game</button>
+          <button class="btn alt" onclick="openServerJoin()">Join game</button>
+          <button class="btn alt" onclick="openServerLobby()">My server games</button>
         </div>
       </div>
       ${howToPlayHTML()}

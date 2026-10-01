@@ -7,6 +7,9 @@
 
   const DEFAULT_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0',
     '#f28c1b', '#0fa3a3', '#d6479b', '#6b4f2a'];
+  const DEFAULT_PLAYER_NAMES = Object.freeze(
+    Array.from({ length: 8 }, (_, index) => `Player ${index + 1}`)
+  );
 
   function createState(options) {
     const {
@@ -868,6 +871,7 @@
   }
 
   return {
+    defaultPlayerNames: DEFAULT_PLAYER_NAMES,
     createState,
     cloneState,
     serializeState,

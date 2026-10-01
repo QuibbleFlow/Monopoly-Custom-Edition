@@ -30,6 +30,7 @@ test('initializes all eight player seats with defined default colors', () => {
   const names = Array.from({ length: 8 }, (_, index) => `Player ${index + 1}`);
   const state = engine.createState({ names });
 
+  assert.deepEqual(engine.defaultPlayerNames, names);
   assert.deepEqual(state.players.map(player => player.name), names);
   assert.ok(state.players.every(player => typeof player.color === 'string'));
   assert.equal(new Set(state.players.map(player => player.color)).size, 8);
