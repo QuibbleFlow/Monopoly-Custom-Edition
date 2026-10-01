@@ -41,7 +41,7 @@ async function getGameState({ account, gameId, db = database() }) {
   }
 
   return db.begin(async tx => {
-    const games = await tx`SELECT * FROM games WHERE id = ${normalizedGameId}`;
+    const games = await tx`SELECT * FROM games WHERE id = ${normalizedGameId} FOR SHARE`;
     const game = games[0];
     if (!game) {
       return err('GAME_NOT_FOUND', 'Game not found.', 404);

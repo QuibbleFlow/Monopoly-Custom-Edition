@@ -2,23 +2,24 @@ const { database, noStore, parseBody, requireAccount, requireSameOrigin, sendErr
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-module.exports = async function updateFriendRequest(req, res) {
-  noStore(res);
+module.exports = async function updateFriendRequest(req, res, deps = {}) {
+  (deps.noStore || noStore)(res);
   if (req.method !== 'PATCH') {
     res.setHeader('Allow', 'PATCH');
     return sendError(res, 405, 'Method not allowed.');
   }
-  if (!requireSameOrigin(req, res)) return;
+  if (!(deps.requireSameOrigin || requireSameOrigin)(req, res)) return;
   try {
-    const account = await requireAccount(req, res);
+    const account = deps.currentAccount ? await deps.currentAccount(req, res) : await requireAccount(req, res);
     if (!account) return;
+    const sql = deps.database ? deps.database() : database();
     const id = String(req.query.id || '');
     const { action } = parseBody(req);
     if (!UUID_PATTERN.test(id) || !['accept', 'decline'].includes(action)) {
       return sendError(res, 400, 'Friend request action is invalid.');
     }
     const status = action === 'accept' ? 'accepted' : 'declined';
-    const rows = await database()`WITH updated AS (
+    const rows = await sql`WITH updated AS (
         UPDATE friend_requests SET status = ${status}, responded_at = now()
         WHERE id = ${id} AND recipient_id = ${account.id} AND status = 'pending'
         RETURNING id, sender_id, recipient_id, status

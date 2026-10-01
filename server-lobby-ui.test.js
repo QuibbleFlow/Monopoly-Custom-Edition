@@ -42,7 +42,7 @@ test('creating a server game stores its returned ID, enters the lobby, and start
   assert.equal(await controller.create('board-9'), true);
   assert.equal(state.requests[0].path, '/api/game/create');
   assert.equal(state.requests[0].options.method, 'POST');
-  assert.deepEqual(JSON.parse(state.requests[0].options.body), { selectedBoardId: 'board-9' });
+  assert.deepEqual(JSON.parse(state.requests[0].options.body), { selectedBoardId: 'board-9', inviteOnly: true });
   assert.equal(state.lobby.gameId, 'game-123');
   assert.equal(state.screen, 'serverLobby');
   assert.ok(state.renderedScreens.includes('serverLobby'));
@@ -68,6 +68,19 @@ test('the page dispatches server screens and renders a game ID input for joining
   assert.match(html, /id="serverGameId"/);
   assert.match(html, /onclick="backendJoinGame\(document\.getElementById\('serverGameId'\)\.value\)"/);
   assert.match(html, /onclick="openServerJoin\(\)"/);
+});
+
+test('server UI uses invitation cards, host Delete confirmation, and host Save & Quit', () => {
+  const html = fs.readFileSync('index.html', 'utf8');
+
+  assert.match(html, /function incomingGameInvitationsHTML\(\)/);
+  assert.match(html, /backendRespondToInvitation\('\$\{esc\(invitation\.invitationId\)\}','accept'\)/);
+  assert.match(html, /game\.isHost \? `<button class="btn alt" onclick="backendDeleteGame/);
+  assert.match(html, /window\.confirm\('Delete this server game/);
+  assert.match(html, /'Save &amp; Quit'/);
+  assert.match(html, /backendGameRequest\('\/api\/game\/pause'/);
+  assert.match(html, /window\.confirm\('Save this match and return everyone to the menu/);
+  assert.match(html, /window\.alert\(`Save & Quit failed/);
 });
 
 test('joining a server game stores its ID, enters its lobby, and starts polling', async () => {

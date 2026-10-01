@@ -147,6 +147,39 @@ async function resumeGame({ account, gameId, db = database() }) {
     const game = games[0];
     if (!game) return err('GAME_NOT_FOUND', 'Game not found.', 404);
     if (game.host_account_id !== account.id) return err('HOST_REQUIRED', 'Only the host can resume the game.', 403);
+
+    if (game.status === 'PAUSED' && !game.resume_save_id) {
+      const players = await tx`SELECT account_id, seat_index, returned_at FROM game_players
+        WHERE game_id = ${normalizedGameId} ORDER BY seat_index ASC FOR UPDATE`;
+      if (!players.some(player => player.account_id === account.id)) {
+        return err('HOST_NOT_PLAYER', 'The host must be an original player to continue this match.', 403);
+      }
+      if (players.length < 2 || players.some(player => !player.returned_at)) {
+        return err('PLAYERS_MISSING', 'All original players must return before the game can resume.', 409);
+      }
+
+      const states = await tx`SELECT id, version, state, board FROM game_states WHERE id = ${normalizedGameId} FOR UPDATE`;
+      const stateRow = states[0];
+      if (!stateRow) return err('GAME_STATE_NOT_FOUND', 'The authoritative match state is unavailable.', 404);
+      const state = engine.deserializeState(stateRow.state);
+      if (state.over || state.players.length !== players.length || state.players.some((player, seatIndex) =>
+        player.accountId !== players[seatIndex].account_id || player.id !== Number(players[seatIndex].seat_index))) {
+        return err('PLAYER_ROSTER_MISMATCH', 'The saved state does not match the original player seats.', 409);
+      }
+
+      await tx`UPDATE games SET status = ${'ACTIVE'}, paused_at = NULL, updated_at = now()
+        WHERE id = ${normalizedGameId} AND status = ${'PAUSED'}`;
+      return {
+        ok: true,
+        gameId: normalizedGameId,
+        status: 'ACTIVE',
+        version: Number(stateRow.version),
+        state,
+        board: parseJson(stateRow.board, {}),
+        players: players.map(player => ({ accountId: player.account_id, seatIndex: Number(player.seat_index) })),
+      };
+    }
+
     if (game.status !== 'WAITING' || !game.resume_save_id) return err('NOT_RESUME_LOBBY', 'This game is not a resume lobby.', 409);
     const players = await tx`SELECT account_id, seat_index, returned_at FROM game_players WHERE game_id = ${normalizedGameId} ORDER BY seat_index ASC`;
     if (players.length < 2 || players.some(player => !player.returned_at)) return err('PLAYERS_MISSING', 'All original players must return before the game can resume.', 409);

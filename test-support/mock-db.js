@@ -6,6 +6,8 @@ function makeDbState() {
     saves: [],
     results: [],
     actionRequests: [],
+    invitations: [],
+    friendships: [],
     accounts: {
       'account-a': { username: 'alice', avatar_url: null },
       'account-b': { username: 'bob', avatar_url: null },
@@ -24,6 +26,8 @@ function makeDb(initial = makeDbState()) {
     saves: (initial.saves || []).map(entry => ({ ...entry })),
     results: (initial.results || []).map(entry => ({ ...entry })),
     actionRequests: (initial.actionRequests || []).map(entry => ({ ...entry })),
+    invitations: (initial.invitations || []).map(entry => ({ ...entry })),
+    friendships: (initial.friendships || []).map(entry => ({ ...entry })),
     accounts: { ...initial.accounts },
   };
 
@@ -40,6 +44,10 @@ function makeDb(initial = makeDbState()) {
     if (query.startsWith('SELECT * FROM game_players WHERE game_id = $1 AND account_id = $2')) {
       return state.players.filter(player => player.game_id === values[0] && player.account_id === values[1]);
     }
+    if (query.startsWith('SELECT account_id FROM game_players WHERE game_id = $1 AND account_id = $2 FOR UPDATE')) {
+      return state.players.filter(player => player.game_id === values[0] && player.account_id === values[1])
+        .map(player => ({ account_id: player.account_id }));
+    }
     if (query.startsWith('SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url FROM game_players gp JOIN accounts a ON a.id = gp.account_id WHERE gp.game_id = $1 ORDER BY gp.seat_index ASC')) {
       return state.players.filter(player => player.game_id === values[0]).sort((a, b) => a.seat_index - b.seat_index).map(player => ({
         game_id: player.game_id,
@@ -55,6 +63,24 @@ function makeDb(initial = makeDbState()) {
       const player = state.players.find(entry => entry.game_id === values[0] && entry.account_id === values[1]);
       if (player) player.returned_at = new Date().toISOString();
       return [{ ok: true }];
+    }
+    if (query.startsWith('UPDATE game_players SET returned_at = NULL WHERE game_id = $1 AND account_id = $2')) {
+      const player = state.players.find(entry => entry.game_id === values[0] && entry.account_id === values[1]);
+      if (player) player.returned_at = null;
+      return [{ ok: true }];
+    }
+    if (query.startsWith('UPDATE game_players SET returned_at = NULL WHERE game_id = $1')) {
+      state.players.filter(entry => entry.game_id === values[0]).forEach(player => { player.returned_at = null; });
+      return [{ ok: true }];
+    }
+    if (query.startsWith('UPDATE game_players SET results_seen_at = now() WHERE game_id = $1 AND account_id = $2')) {
+      const player = state.players.find(entry => entry.game_id === values[0] && entry.account_id === values[1]);
+      if (player) player.results_seen_at = new Date().toISOString();
+      return [{ ok: true }];
+    }
+    if (query.startsWith('SELECT COUNT(*)::int AS total, COUNT(results_seen_at)::int AS seen FROM game_players WHERE game_id = $1')) {
+      const players = state.players.filter(entry => entry.game_id === values[0]);
+      return [{ total: players.length, seen: players.filter(player => player.results_seen_at).length }];
     }
     if (query.startsWith('SELECT gp.account_id, gp.seat_index, a.username, a.avatar_url FROM game_players gp JOIN accounts a ON a.id = gp.account_id WHERE gp.game_id = $1 ORDER BY gp.seat_index ASC')) {
       return state.players.filter(player => player.game_id === values[0]).sort((a, b) => a.seat_index - b.seat_index).map(player => ({
@@ -74,6 +100,62 @@ function makeDb(initial = makeDbState()) {
     if (query.startsWith('SELECT COUNT(*)::int AS total FROM game_players WHERE game_id = $1')) {
       return [{ total: state.players.filter(player => player.game_id === values[0]).length }];
     }
+    if (query.startsWith('SELECT seat_index FROM game_players WHERE game_id = $1 ORDER BY seat_index ASC FOR UPDATE')) {
+      return state.players.filter(player => player.game_id === values[0]).sort((a, b) => a.seat_index - b.seat_index)
+        .map(player => ({ seat_index: player.seat_index }));
+    }
+    if (query.startsWith('SELECT 1 FROM friendships WHERE account_low = LEAST($1::uuid, $2::uuid) AND account_high = GREATEST($3::uuid, $4::uuid) FOR KEY SHARE')) {
+      const pair = [values[0], values[1]].sort();
+      return state.friendships.some(friendship => friendship.account_low === pair[0] && friendship.account_high === pair[1])
+        ? [{ '?column?': 1 }]
+        : [];
+    }
+    if (query.startsWith('SELECT id, status FROM game_invitations WHERE game_id = $1 AND invitee_account_id = $2 FOR UPDATE')) {
+      return state.invitations.filter(invitation => invitation.game_id === values[0] && invitation.invitee_account_id === values[1])
+        .map(invitation => ({ id: invitation.id, status: invitation.status }));
+    }
+    if (query.startsWith('SELECT game_id FROM game_invitations WHERE id = $1 AND invitee_account_id = $2')) {
+      return state.invitations.filter(invitation => invitation.id === values[0] && invitation.invitee_account_id === values[1])
+        .map(invitation => ({ game_id: invitation.game_id }));
+    }
+    if (query.startsWith('SELECT * FROM game_invitations WHERE id = $1 AND invitee_account_id = $2 FOR UPDATE')) {
+      return state.invitations.filter(invitation => invitation.id === values[0] && invitation.invitee_account_id === values[1]);
+    }
+    if (query.startsWith('INSERT INTO game_invitations')) {
+      const invitation = {
+        id: `invitation-${state.invitations.length + 1}`,
+        game_id: values[0],
+        inviter_account_id: values[1],
+        invitee_account_id: values[2],
+        status: 'pending',
+        created_at: new Date().toISOString(),
+        responded_at: null,
+      };
+      state.invitations.push(invitation);
+      return [{ id: invitation.id, game_id: invitation.game_id, invitee_account_id: invitation.invitee_account_id, status: invitation.status, created_at: invitation.created_at }];
+    }
+    if (query.startsWith('UPDATE game_invitations SET inviter_account_id = $1, status = $2, created_at = now(), responded_at = NULL WHERE id = $3')) {
+      const invitation = state.invitations.find(entry => entry.id === values[2]);
+      if (invitation) {
+        invitation.inviter_account_id = values[0];
+        invitation.status = values[1];
+        invitation.created_at = new Date().toISOString();
+        invitation.responded_at = null;
+      }
+      return invitation ? [{ ...invitation }] : [];
+    }
+    if (query.startsWith("UPDATE game_invitations SET status = $1, responded_at = now() WHERE id = $2 AND status = 'pending'")) {
+      const invitation = state.invitations.find(entry => entry.id === values[1] && entry.status === 'pending');
+      if (invitation) {
+        invitation.status = values[0];
+        invitation.responded_at = new Date().toISOString();
+      }
+      return invitation ? [{ ...invitation }] : [];
+    }
+    if (query.startsWith('SELECT account_id, seat_index FROM game_players WHERE game_id = $1 ORDER BY seat_index ASC FOR UPDATE')) {
+      return state.players.filter(player => player.game_id === values[0]).sort((a, b) => a.seat_index - b.seat_index)
+        .map(player => ({ account_id: player.account_id, seat_index: player.seat_index }));
+    }
     if (query.startsWith('SELECT account_id, seat_index, returned_at FROM game_players WHERE game_id = $1 ORDER BY seat_index ASC')) {
       return state.players.filter(player => player.game_id === values[0]).sort((a, b) => a.seat_index - b.seat_index).map(player => ({
         account_id: player.account_id,
@@ -82,14 +164,19 @@ function makeDb(initial = makeDbState()) {
       }));
     }
     if (query.startsWith('INSERT INTO games')) {
+      const hasInviteOnly = query.includes('invite_only');
+      const selectedBoardIndex = hasInviteOnly ? 4 : 3;
       state.games.push({
         id: values[0],
         host_account_id: values[1],
         status: values[2],
-        selected_board_id: values[3],
-        resume_save_id: values[4] || null,
+        invite_only: hasInviteOnly ? !!values[3] : false,
+        selected_board_id: values[selectedBoardIndex] || null,
+        resume_save_id: values[selectedBoardIndex + 1] || null,
         created_at: new Date().toISOString(),
         started_at: null,
+        paused_at: null,
+        finished_at: null,
         updated_at: new Date().toISOString(),
       });
       return [{ ok: true }];
@@ -101,6 +188,7 @@ function makeDb(initial = makeDbState()) {
         seat_index: Number(values[2]),
         joined_at: new Date().toISOString(),
         returned_at: values[3] ? new Date(values[3]).toISOString() : null,
+        results_seen_at: null,
       });
       return [{ ok: true }];
     }
@@ -111,13 +199,62 @@ function makeDb(initial = makeDbState()) {
       state.players = state.players.filter(player => !(player.game_id === values[0] && player.account_id === values[1]));
       return [];
     }
+    if (query.startsWith('DELETE FROM game_players WHERE game_id = $1')) {
+      state.players = state.players.filter(player => player.game_id !== values[0]);
+      return [];
+    }
+    if (query.startsWith('DELETE FROM game_invitations WHERE game_id = $1')) {
+      state.invitations = state.invitations.filter(invitation => invitation.game_id !== values[0]);
+      return [];
+    }
+    if (query.startsWith('DELETE FROM game_results WHERE game_id = $1')) {
+      state.results = state.results.filter(result => result.game_id !== values[0]);
+      return [];
+    }
+    if (query.startsWith('DELETE FROM game_action_requests WHERE game_id = $1')) {
+      state.actionRequests = state.actionRequests.filter(request => request.game_id !== values[0]);
+      return [];
+    }
     if (query.startsWith('DELETE FROM games WHERE id = $1')) {
       state.games = state.games.filter(game => game.id !== values[0]);
+      state.players = state.players.filter(player => player.game_id !== values[0]);
+      state.states = state.states.filter(entry => entry.id !== values[0]);
+      state.actionRequests = state.actionRequests.filter(entry => entry.game_id !== values[0]);
+      state.results = state.results.filter(entry => entry.game_id !== values[0]);
+      state.invitations = state.invitations.filter(entry => entry.game_id !== values[0]);
+      return [];
+    }
+    if (query.startsWith("DELETE FROM games WHERE id = $1 AND status = 'FINISHED'")) {
+      const game = state.games.find(entry => entry.id === values[0] && entry.status === 'FINISHED');
+      if (game) {
+        state.games = state.games.filter(entry => entry.id !== values[0]);
+        state.players = state.players.filter(player => player.game_id !== values[0]);
+        state.states = state.states.filter(entry => entry.id !== values[0]);
+        state.actionRequests = state.actionRequests.filter(entry => entry.game_id !== values[0]);
+        state.results = state.results.filter(entry => entry.game_id !== values[0]);
+        state.invitations = state.invitations.filter(entry => entry.game_id !== values[0]);
+      }
+      return [];
+    }
+    if (query.startsWith("DELETE FROM games WHERE status = 'FINISHED' AND updated_at < now() - interval '30 days'")) {
+      const expired = state.games.filter(game => game.status === 'FINISHED' && game.updated_at && Date.now() - new Date(game.updated_at).getTime() > 30 * 24 * 60 * 60 * 1000);
+      for (const game of expired) {
+        state.games = state.games.filter(entry => entry.id !== game.id);
+        state.players = state.players.filter(player => player.game_id !== game.id);
+        state.states = state.states.filter(entry => entry.id !== game.id);
+        state.actionRequests = state.actionRequests.filter(entry => entry.game_id !== game.id);
+        state.results = state.results.filter(entry => entry.game_id !== game.id);
+        state.invitations = state.invitations.filter(entry => entry.game_id !== game.id);
+      }
       return [];
     }
     if (query.startsWith('DELETE FROM game_states WHERE id = $1')) {
       state.states = state.states.filter(entry => entry.id !== values[0]);
       return [];
+    }
+    if (query.startsWith("SELECT id FROM games WHERE status = 'FINISHED' AND updated_at < now() - interval '30 days' FOR UPDATE")) {
+      return state.games.filter(game => game.status === 'FINISHED' && game.updated_at && Date.now() - new Date(game.updated_at).getTime() > 30 * 24 * 60 * 60 * 1000)
+        .map(game => ({ id: game.id }));
     }
     if (query.startsWith('UPDATE games SET host_account_id = $1, updated_at = now() WHERE id = $2')) {
       const game = state.games.find(entry => entry.id === values[1]);
@@ -156,16 +293,38 @@ function makeDb(initial = makeDbState()) {
       }
       return [{ ok: true }];
     }
-    if (query.startsWith('UPDATE games SET status = $1, updated_at = now() WHERE id = $2 AND status <> $3')) {
-      const game = state.games.find(entry => entry.id === values[1] && entry.status !== values[2]);
+    if (query.startsWith('UPDATE games SET status = $1, paused_at = now(), updated_at = now() WHERE id = $2 AND status = $3')) {
+      const game = state.games.find(entry => entry.id === values[1] && entry.status === values[2]);
       if (game) {
         game.status = values[0];
+        game.paused_at = new Date().toISOString();
+        game.updated_at = new Date().toISOString();
+      }
+      return [{ ok: true }];
+    }
+    if (query.startsWith('UPDATE games SET status = $1, paused_at = NULL, updated_at = now() WHERE id = $2 AND status = $3')) {
+      const game = state.games.find(entry => entry.id === values[1] && entry.status === values[2]);
+      if (game) {
+        game.status = values[0];
+        game.paused_at = null;
+        game.updated_at = new Date().toISOString();
+      }
+      return [{ ok: true }];
+    }
+    if (query.startsWith('UPDATE games SET status = $1, finished_at = COALESCE(finished_at, now()), updated_at = now() WHERE id = $2 AND (status <> $3 OR finished_at IS NULL)')) {
+      const game = state.games.find(entry => entry.id === values[1] && (entry.status !== values[2] || !entry.finished_at));
+      if (game) {
+        game.status = values[0];
+        game.finished_at = game.finished_at || new Date().toISOString();
         game.updated_at = new Date().toISOString();
       }
       return [{ ok: true }];
     }
     if (query.startsWith('SELECT host_account_id FROM games WHERE id = $1')) {
       return state.games.filter(game => game.id === values[0]).map(game => ({ host_account_id: game.host_account_id }));
+    }
+    if (query.startsWith('SELECT status, host_account_id FROM games WHERE id = $1 FOR UPDATE')) {
+      return state.games.filter(game => game.id === values[0]).map(game => ({ status: game.status, host_account_id: game.host_account_id }));
     }
     if (query.startsWith('SELECT g.*, gp.account_id, gp.seat_index FROM game_players gp JOIN games g ON g.id = gp.game_id WHERE gp.account_id = $1 ORDER BY g.updated_at DESC')) {
       return state.games.filter(game => state.players.some(player => player.game_id === game.id && player.account_id === values[0]))
@@ -177,6 +336,9 @@ function makeDb(initial = makeDbState()) {
     }
     if (query.startsWith('SELECT * FROM games WHERE id = $1 FOR UPDATE')) {
       return state.games.filter(game => game.id === values[0]);
+    }
+    if (query.startsWith('SELECT id FROM games WHERE id = $1 FOR UPDATE')) {
+      return state.games.filter(game => game.id === values[0]).map(game => ({ id: game.id }));
     }
     if (query.startsWith('SELECT * FROM games WHERE id = $1')) {
       return state.games.filter(game => game.id === values[0]);

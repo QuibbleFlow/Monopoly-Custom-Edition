@@ -65,7 +65,7 @@
         dependencies.render();
       },
       create(selectedBoardId) {
-        return submit('/api/game/create', { selectedBoardId: selectedBoardId || null }, 'serverLobby');
+        return submit('/api/game/create', { selectedBoardId: selectedBoardId || null, inviteOnly: true }, 'serverLobby');
       },
       join(gameId) {
         const normalizedGameId = typeof gameId === 'string' ? gameId.trim() : '';

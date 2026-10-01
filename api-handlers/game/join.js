@@ -22,7 +22,7 @@ module.exports = async function joinGameRoute(req, res) {
     return res.status(result.status).json({ error: result.error });
   }
 
-  return res.status(200).json({ ok: true, gameId: result.gameId, game: result.game, players: result.players, status: result.status });
+  return res.status(200).json({ ok: true, gameId: result.gameId, game: result.game, players: result.players, status: result.status, canStart: result.canStart, canResume: result.canResume });
 };
 
 module.exports.handleJoinGame = joinGame;

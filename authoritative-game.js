@@ -61,12 +61,14 @@
     async applyAuthoritativeState(payload) {
       if (!payload || !payload.gameId || payload.gameId !== this.gameId) return false;
       const nextVersion = Number(payload.version);
-      if (!Number.isInteger(nextVersion) || nextVersion <= this.version) return false;
-      this.version = nextVersion;
+      if (!Number.isInteger(nextVersion) || nextVersion < this.version) return false;
+      if (nextVersion === this.version && (payload.status || this.status) === this.status) return false;
+      this.version = Math.max(this.version, nextVersion);
       this.status = payload.status || this.status;
-      this.state = payload.state || null;
+      this.state = payload.state || this.state;
       this.lastEvents = Array.isArray(payload.events) ? payload.events : [];
       await this.notify();
+      if (this.status === 'FINISHED') this.stopPolling();
       return true;
     },
 

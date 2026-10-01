@@ -88,13 +88,47 @@ CREATE INDEX IF NOT EXISTS game_action_requests_game_created_idx
 CREATE TABLE IF NOT EXISTS games (
   id TEXT PRIMARY KEY,
   host_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  status TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN ('WAITING', 'ACTIVE', 'FINISHED')),
+  status TEXT NOT NULL DEFAULT 'WAITING' CHECK (status IN ('WAITING', 'ACTIVE', 'PAUSED', 'FINISHED')),
+  invite_only BOOLEAN NOT NULL DEFAULT FALSE,
   selected_board_id UUID,
   resume_save_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at TIMESTAMPTZ,
+  paused_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS game_invitations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  inviter_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  invitee_account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'revoked')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  responded_at TIMESTAMPTZ,
+  CHECK (inviter_account_id <> invitee_account_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS game_invitations_game_invitee_unique
+  ON game_invitations (game_id, invitee_account_id);
+CREATE INDEX IF NOT EXISTS game_invitations_invitee_status_idx
+  ON game_invitations (invitee_account_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS game_invitations_inviter_status_idx
+  ON game_invitations (inviter_account_id, status, created_at DESC);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'game_states_id_fkey' AND conrelid = 'game_states'::regclass) THEN
+    ALTER TABLE game_states ADD CONSTRAINT game_states_id_fkey
+      FOREIGN KEY (id) REFERENCES games(id) ON DELETE CASCADE;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'game_action_requests_game_id_fkey' AND conrelid = 'game_action_requests'::regclass) THEN
+    ALTER TABLE game_action_requests ADD CONSTRAINT game_action_requests_game_id_fkey
+      FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE;
+  END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS game_players (
   game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
@@ -102,6 +136,7 @@ CREATE TABLE IF NOT EXISTS game_players (
   seat_index INTEGER NOT NULL CHECK (seat_index >= 0),
   joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   returned_at TIMESTAMPTZ,
+  results_seen_at TIMESTAMPTZ,
   PRIMARY KEY (game_id, account_id),
   UNIQUE (game_id, seat_index),
   CHECK (seat_index < 8)

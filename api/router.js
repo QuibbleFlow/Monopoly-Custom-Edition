@@ -20,11 +20,15 @@ const routes = {
   game: {
     action: require('../api-handlers/game/action.js'),
     create: require('../api-handlers/game/create.js'),
+    delete: require('../api-handlers/game/delete.js'),
+    invitations: require('../api-handlers/game/invitations.js'),
+    invitation: require('../api-handlers/game/invitations.js').invitationRoute,
     join: require('../api-handlers/game/join.js'),
     leave: require('../api-handlers/game/leave.js'),
     load: require('../api-handlers/game/load.js'),
     lobby: require('../api-handlers/game/lobby.js'),
     myGames: require('../api-handlers/game/my-games.js'),
+    pause: require('../api-handlers/game/pause.js'),
     results: require('../api-handlers/game/results.js'),
     resume: require('../api-handlers/game/resume.js'),
     saves: require('../api-handlers/game/saves.js'),
@@ -103,6 +107,10 @@ module.exports = async function apiRouter(req, res) {
     }
 
     if (section === 'game') {
+      if (action === 'invitations' && parts.length === 2) return routes.game.invitations(req, res);
+      if (action === 'invitations' && parts.length === 3) {
+        return routes.game.invitation(withQuery(req, { id: idOrAction }), res);
+      }
       const handler = action === 'my-games' ? routes.game.myGames : routes.game[action];
       if (!handler || parts.length !== 2) return notFound(res);
       return handler(req, res);

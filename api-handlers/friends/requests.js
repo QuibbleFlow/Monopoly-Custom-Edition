@@ -1,17 +1,18 @@
 const { database, noStore, parseBody, requireAccount, requireSameOrigin, sendError } = require('../../lib/account');
 
-module.exports = async function friendRequests(req, res) {
-  noStore(res);
+module.exports = async function friendRequests(req, res, deps = {}) {
+  (deps.noStore || noStore)(res);
   if (!['GET', 'POST'].includes(req.method)) {
     res.setHeader('Allow', 'GET, POST');
     return sendError(res, 405, 'Method not allowed.');
   }
-  if (req.method === 'POST' && !requireSameOrigin(req, res)) return;
+  if (req.method === 'POST' && !(deps.requireSameOrigin || requireSameOrigin)(req, res)) return;
   try {
-    const account = await requireAccount(req, res);
+    const account = deps.currentAccount ? await deps.currentAccount(req, res) : await requireAccount(req, res);
     if (!account) return;
+    const sql = deps.database ? deps.database() : database();
     if (req.method === 'GET') {
-      const rows = await database()`SELECT r.id, r.status, r.created_at,
+      const rows = await sql`SELECT r.id, r.status, r.created_at,
         CASE WHEN r.recipient_id = ${account.id} THEN 'incoming' ELSE 'outgoing' END AS direction,
         a.id AS account_id, a.username, a.avatar_url
         FROM friend_requests r
@@ -29,7 +30,7 @@ module.exports = async function friendRequests(req, res) {
     if (typeof username !== 'string' || username.trim().length < 3 || username.trim().length > 24) {
       return sendError(res, 400, 'Enter a username between 3 and 24 characters.');
     }
-    const rows = await database()`INSERT INTO friend_requests (sender_id, recipient_id)
+    const rows = await sql`INSERT INTO friend_requests (sender_id, recipient_id)
       SELECT ${account.id}, target.id FROM accounts target
       WHERE lower(target.username) = lower(${username.trim()})
         AND target.id <> ${account.id}

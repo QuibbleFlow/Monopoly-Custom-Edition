@@ -2980,31 +2980,49 @@ function updateSaveGameBtn() {
   const el = $('saveGameBtnHolder');
   if (!el) return;
   if (!game || game.over || !backendIsHostOfCurrentGame()) { el.innerHTML = ''; return; }
-  el.innerHTML = `<button class="btn alt" ${saveGameInFlight ? 'disabled' : ''} onclick="openSaveGameDialog()">${saveGameInFlight ? 'Saving...' : 'Save game'}</button>`;
+  el.innerHTML = `<button class="btn alt" ${saveGameInFlight ? 'disabled' : ''} onclick="openSaveGameDialog()">${saveGameInFlight ? 'Saving &amp; quitting...' : 'Save &amp; Quit'}</button>`;
 }
 function openSaveGameDialog() {
   if (saveGameInFlight) return;
-  const name = window.prompt('Save name', `Save ${new Date().toLocaleString()}`);
-  if (name === null) return;
-  backendSaveGame(window.authoritativeGame.gameId, name);
+  if (!window.confirm('Save this match and return everyone to the menu? The original players must all return before it can continue.')) return;
+  backendSaveAndQuitGame(window.authoritativeGame.gameId);
 }
-async function backendSaveGame(gameId, name) {
+async function backendSaveAndQuitGame(gameId) {
   if (!gameId || saveGameInFlight) return;
   saveGameInFlight = true;
   updateSaveGameBtn();
   try {
-    await backendGameRequest('/api/game/saves', {
+    const result = await backendGameRequest('/api/game/pause', {
       method: 'POST',
-      body: JSON.stringify({ gameId, name }),
+      body: JSON.stringify({ gameId, version: window.authoritativeGame.version }),
     });
-    setAccountStatus(`Saved "${name}".`);
-    await refreshBackendSaves();
+    if (result.status !== 'PAUSED' || result.gameId !== gameId) {
+      throw new Error('The server did not confirm that the match was saved and paused.');
+    }
+    await handleServerGamePaused(gameId, true);
   } catch (error) {
-    setAccountStatus(`Save failed: ${error.message}`);
+    setAccountStatus(`Save & Quit failed: ${error.message}`);
+    window.alert(`Save & Quit failed. You are still in the match.\n\n${error.message}`);
   } finally {
     saveGameInFlight = false;
     updateSaveGameBtn();
   }
+}
+
+async function handleServerGamePaused(gameId, refreshGames = false) {
+  if (window.authoritativeGame?.gameId !== gameId) return;
+  stopBackendLobbyPolling();
+  await window.authoritativeGame.clearAuthoritativeState();
+  authoritativeAppliedGameId = null;
+  game = null;
+  busy = false;
+  popup = null;
+  stopGameTick();
+  backendLobby = null;
+  setup.screen = '';
+  accountMessage = 'This match is paused. The original players can rejoin from My server games.';
+  if (refreshGames) await refreshBackendMyGames();
+  renderSetup();
 }
 
 // Only the host (seat 0) ever sees a working pause control; guests and
@@ -4222,6 +4240,10 @@ let pendingAccountSettings = {};
 
 if (window.authoritativeGame) {
   window.authoritativeGame.subscribe(async snapshot => {
+    if (snapshot?.gameId && snapshot.status === 'PAUSED') {
+      await handleServerGamePaused(snapshot.gameId, true);
+      return;
+    }
     if (!snapshot || !snapshot.gameId || !snapshot.state || (snapshot.status !== 'ACTIVE' && snapshot.status !== 'FINISHED')) {
       if (!snapshot || !snapshot.gameId) authoritativeAppliedGameId = null;
       return;
@@ -4347,6 +4369,9 @@ async function accountRequest(path, options = {}) {
 let backendLobby = null;
 let backendMyGames = [];
 let backendSaves = [];
+let backendFriends = [];
+let backendGameInvitations = [];
+let backendSocialError = '';
 let backendJoinGameId = '';
 const backendLobbyController = ServerLobbyUI.createServerLobbyController({
   request: backendGameRequest,
@@ -4366,6 +4391,27 @@ async function refreshBackendSaves() {
   } catch (error) {
     backendSaves = [];
     console.warn('Could not refresh saved games:', error);
+  }
+}
+
+async function refreshBackendSocial() {
+  if (!accountUser) {
+    backendFriends = [];
+    backendGameInvitations = [];
+    backendSocialError = '';
+    return;
+  }
+  try {
+    const [friendResult, invitationResult] = await Promise.all([
+      accountRequest('/api/friends'),
+      backendGameRequest('/api/game/invitations'),
+    ]);
+    backendFriends = Array.isArray(friendResult.friends) ? friendResult.friends : [];
+    backendGameInvitations = Array.isArray(invitationResult.invitations) ? invitationResult.invitations : [];
+    backendSocialError = '';
+  } catch (error) {
+    backendSocialError = error.message;
+    console.warn('Could not refresh server multiplayer friends/invitations:', error);
   }
 }
 
@@ -4466,7 +4512,7 @@ async function refreshBackendMyGames() {
     backendMyGames = [];
     console.warn('Could not refresh backend games:', error);
   }
-  await refreshBackendSaves();
+  await Promise.all([refreshBackendSaves(), refreshBackendSocial()]);
 }
 
 function backendCreateGame() {
@@ -4482,6 +4528,9 @@ function backendJoinGame(gameId) {
 function openServerJoin() {
   backendJoinGameId = '';
   backendLobbyController.openJoin();
+  refreshBackendMyGames().then(() => {
+    if (setup.screen === 'serverJoin') renderSetup();
+  });
 }
 
 function openServerLobby() {
@@ -4503,6 +4552,98 @@ async function backendOpenGame(gameId) {
   renderSetup();
 }
 
+async function backendRejoinPausedGame(gameId) {
+  if (!gameId) return;
+  try {
+    const result = await backendGameRequest('/api/game/join', {
+      method: 'POST',
+      body: JSON.stringify({ gameId }),
+    });
+    backendLobby = {
+      gameId: result.gameId,
+      game: result.game || null,
+      players: Array.isArray(result.players) ? result.players : [],
+      canResume: !!(result.canResume || result.canStart),
+      canStart: false,
+    };
+    setup.screen = 'serverLobby';
+    startBackendLobbyPolling(result.gameId);
+    await refreshBackendMyGames();
+    renderSetup();
+  } catch (error) {
+    backendSocialError = error.message;
+    renderSetup();
+  }
+}
+
+async function backendDeleteGame(gameId) {
+  if (!gameId || !window.confirm('Delete this server game and its stored multiplayer records? This cannot be undone.')) return;
+  try {
+    await backendGameRequest('/api/game/delete', {
+      method: 'POST',
+      body: JSON.stringify({ gameId }),
+    });
+    if (backendLobby?.gameId === gameId) backendLobby = null;
+    await refreshBackendMyGames();
+    renderSetup();
+  } catch (error) {
+    backendSocialError = error.message;
+    renderSetup();
+  }
+}
+
+async function backendInviteFriend(gameId, friendId) {
+  try {
+    await backendGameRequest('/api/game/invitations', {
+      method: 'POST',
+      body: JSON.stringify({ gameId, inviteeAccountId: friendId }),
+    });
+    await refreshBackendSocial();
+    backendSocialError = 'Invitation sent.';
+  } catch (error) {
+    backendSocialError = error.message;
+  }
+  renderSetup();
+}
+
+async function backendRespondToInvitation(invitationId, action) {
+  try {
+    const result = await backendGameRequest(`/api/game/invitations/${encodeURIComponent(invitationId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ action }),
+    });
+    if (action === 'accept') {
+      backendLobby = {
+        gameId: result.gameId,
+        game: result.game || null,
+        players: Array.isArray(result.players) ? result.players : [],
+        canStart: !!result.canStart,
+      };
+      setup.screen = 'serverLobby';
+      startBackendLobbyPolling(result.gameId);
+    }
+    backendSocialError = action === 'accept' ? '' : 'Invitation declined.';
+    await refreshBackendMyGames();
+  } catch (error) {
+    backendSocialError = error.message;
+  }
+  renderSetup();
+}
+
+async function sendLobbyFriendRequest(username) {
+  try {
+    await accountRequest('/api/friends/requests', {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    });
+    backendSocialError = `Friend request sent to ${username}.`;
+    await refreshBackendSocial();
+  } catch (error) {
+    backendSocialError = error.message;
+  }
+  renderSetup();
+}
+
 async function backendRefreshLobby(gameId, options = {}) {
   if (!gameId || backendLobbyPollInFlight) return;
   backendLobbyPollInFlight = true;
@@ -4513,6 +4654,7 @@ async function backendRefreshLobby(gameId, options = {}) {
       game: result.game || null,
       players: Array.isArray(result.players) ? result.players : [],
       canStart: !!result.canStart,
+      canResume: !!result.canResume,
     };
     const status = result.status || result.game?.status;
     if (status === 'ACTIVE') {
@@ -4584,44 +4726,80 @@ async function backendStartGame(gameId) {
 
 function backendLobbyPlayersHTML(players = [], title = 'Players', options = {}) {
   if (!players.length) return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2><p class="muted">No one has joined this server lobby yet.</p></div>`;
-  const isResume = !!options.isResume;
+  const isResume = !!options.isResume || !!options.isPaused;
   const rows = players.map(p => {
     const name = p.username || p.name || 'Player';
     const seat = Number(p.seatIndex ?? p.seat_index ?? 0) + 1;
     const avatar = p.avatarUrl || p.avatar_url;
     const returned = p.returnedAt || p.returned_at;
     const statusTag = isResume
-      ? `<span class="tag ${returned ? 'ok' : 'wait'}">${returned ? 'Returned' : 'Waiting'}</span>`
+      ? `<span class="tag ${returned ? 'ok' : 'wait'}">${returned ? 'Ready' : 'Missing'}</span>`
       : `<span class="tag">Seat ${seat}</span>`;
-    return `<div class="social-row">${socialAvatar({ username: name, avatar_url: avatar })}<span class="social-name">${esc(name)}</span>${statusTag}</div>`;
+    const playerId = p.accountId || p.account_id;
+    const isSelf = playerId && accountUser?.id === playerId;
+    const isFriend = backendFriends.some(friend => friend.id === playerId);
+    const friendAction = !playerId || isSelf ? '' : isFriend
+      ? '<span class="tag">Friend</span>'
+      : `<button class="btn alt" onclick="sendLobbyFriendRequest('${esc(name)}')">Add friend</button>`;
+    return `<div class="social-row">${socialAvatar({ username: name, avatar_url: avatar })}<span class="social-name">${esc(name)}</span>${statusTag}${friendAction}</div>`;
   }).join('');
   return `<div class="panel acc-orange"><h2>🧑‍🤝‍🧑 ${title}</h2>${rows}</div>`;
 }
 
+function incomingGameInvitationsHTML() {
+  const incoming = backendGameInvitations.filter(invitation => invitation.direction === 'incoming');
+  if (!incoming.length) return '';
+  return `<div class="panel acc-orange"><h2>Game invitations</h2>
+    ${incoming.map(invitation => `<div class="social-row">
+      <span class="social-name">${esc(invitation.hostUsername)} invited you</span>
+      <span class="tag">${esc(invitation.gameStatus)}</span>
+      <span class="tag">${Number(invitation.playerCount)}/8 players</span>
+      <button class="btn" onclick="backendRespondToInvitation('${esc(invitation.invitationId)}','accept')">Accept</button>
+      <button class="btn alt" onclick="backendRespondToInvitation('${esc(invitation.invitationId)}','decline')">Decline</button>
+    </div>`).join('')}
+  </div>`;
+}
+
 function renderServerLobbySetup() {
   const lobby = backendLobby;
-  const isResumeLobby = !!(lobby && lobby.game && lobby.game.resumeSaveId);
+  const status = lobby?.game?.status || 'WAITING';
+  const isSnapshotResume = !!lobby?.game?.resumeSaveId;
+  const host = lobby?.players?.find(player => (player.accountId || player.account_id) === lobby.game?.hostAccountId);
+  const isHost = !!accountUser && lobby?.game?.hostAccountId === accountUser.id;
+  const memberIds = new Set((lobby?.players || []).map(player => player.accountId || player.account_id));
   const lobbyPanel = lobby && lobby.gameId ? `
     <div class="panel acc-blue">
-      <h2>Server lobby${isResumeLobby ? ' (resuming a save)' : ''}</h2>
-      <p class="muted">Game ID: <strong>${esc(lobby.gameId)}</strong></p>
+      <h2>Server match <span class="tag">${esc(status)}</span></h2>
+      <p class="muted">Hosted by ${esc(host?.username || 'a player')}</p>
       <div class="row">
         <button class="btn alt" onclick="backendRefreshLobby('${esc(lobby.gameId)}')">Refresh</button>
-        <button class="btn alt" onclick="backendLeaveGame('${esc(lobby.gameId)}')">Leave lobby</button>
-        <button class="btn alt" onclick="openServerJoin()">Join another</button>
+        <button class="btn alt" onclick="backendLeaveGame('${esc(lobby.gameId)}')">Leave</button>
+        <button class="btn alt" onclick="openServerJoin()">Invitations</button>
       </div>
-      ${backendLobbyPlayersHTML(lobby.players, isResumeLobby ? 'Original players' : 'Server roster', { isResume: isResumeLobby })}
-      ${lobby.canStart
-        ? (isResumeLobby
-          ? `<button class="btn" onclick="backendResumeGame('${esc(lobby.gameId)}')">Resume game</button>`
-          : `<button class="btn" onclick="backendStartGame('${esc(lobby.gameId)}')">Start server lobby</button>`)
-        : (isResumeLobby ? '<p class="muted">Waiting for every original player to return.</p>' : '')}
+      ${backendLobbyPlayersHTML(lobby.players, status === 'PAUSED' || isSnapshotResume ? 'Original players' : 'Players', {
+        isPaused: status === 'PAUSED', isResume: isSnapshotResume,
+      })}
+      ${status === 'WAITING' && isHost ? `<div class="panel acc-yellow"><h2>Invite friends</h2>
+        ${backendFriends.filter(friend => !memberIds.has(friend.id)).map(friend => {
+          const existing = backendGameInvitations.find(invitation => invitation.direction === 'outgoing' &&
+            invitation.gameId === lobby.gameId && invitation.inviteeUsername === friend.username);
+          return `<div class="social-row">${socialAvatar(friend)}<span class="social-name">${esc(friend.username)}</span>
+            ${existing ? '<span class="tag">Invited</span>' : `<button class="btn alt" onclick="backendInviteFriend('${esc(lobby.gameId)}','${esc(friend.id)}')">Invite</button>`}</div>`;
+        }).join('') || '<p class="muted">All friends are already in this lobby.</p>'}
+      </div>` : ''}
+      ${status === 'WAITING' && lobby.canStart && isHost
+        ? (isSnapshotResume
+          ? `<button class="btn" onclick="backendResumeGame('${esc(lobby.gameId)}')">Resume saved game</button>`
+          : `<button class="btn" onclick="backendStartGame('${esc(lobby.gameId)}')">Start game</button>`)
+        : ''}
+      ${status === 'PAUSED' && lobby.canResume && isHost ? `<button class="btn" onclick="backendResumeGame('${esc(lobby.gameId)}')">Continue game</button>` : ''}
+      ${status === 'PAUSED' && !lobby.canResume ? '<p class="muted">Waiting for every original player to return.</p>' : ''}
     </div>` : `
     <div class="panel acc-blue">
-      <h2>Server lobby</h2>
+      <h2>Server multiplayer</h2>
       ${backendLobbyController.inFlight
-        ? '<p class="muted" role="status">Creating server lobby…</p>'
-        : `<button class="btn" onclick="backendCreateGame()">Create server lobby</button>`}
+        ? '<p class="muted" role="status">Creating server game…</p>'
+        : `<button class="btn" onclick="backendCreateGame()">Create server game</button>`}
       ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
     </div>`;
   const gamesPanel = backendMyGames.length ? `
@@ -4629,9 +4807,14 @@ function renderServerLobbySetup() {
       <h2>My server games</h2>
       ${backendMyGames.map(game => {
         const gameId = game.gameId || game.id;
-        return `<div class="social-row"><span class="social-name">${esc(gameId || 'Game')}</span>
-          <span class="tag">${esc(game.status || 'WAITING')}</span>
-          <button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">Open</button></div>`;
+        const statusTag = ['WAITING', 'ACTIVE', 'PAUSED'].includes(game.status) ? game.status : 'FINISHED';
+        const openAction = statusTag === 'PAUSED'
+          ? `<button class="btn" onclick="backendRejoinPausedGame('${esc(gameId)}')">Rejoin</button>`
+          : `<button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">${statusTag === 'ACTIVE' ? 'Continue' : 'Open'}</button>`;
+        return `<div class="social-row"><span class="social-name">Server game</span>
+          <span class="tag">${statusTag}</span>${openAction}
+          ${game.isHost ? `<button class="btn alt" onclick="backendDeleteGame('${esc(gameId)}')">Delete</button>` : ''}
+        </div>`;
       }).join('')}
     </div>` : '';
   const savesPanel = backendSaves.length ? `
@@ -4646,7 +4829,12 @@ function renderServerLobbySetup() {
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
     <p class="sub">Server multiplayer</p>
     ${!accountUser ? accountPanelHTML() : ''}
-    ${lobbyPanel}${gamesPanel}${savesPanel}
+    ${lobbyPanel}${incomingGameInvitationsHTML()}${gamesPanel}${savesPanel}
+    <div class="panel acc-green"><h2>Friends</h2>
+      <p class="muted">${backendFriends.length} friends</p>
+      <button class="btn alt" onclick="openFriendsScreen()">Manage friends</button>
+    </div>
+    ${backendSocialError ? `<p class="error" role="alert">${esc(backendSocialError)}</p>` : ''}
     <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
   </div>`;
 }
@@ -4654,23 +4842,31 @@ function renderServerLobbySetup() {
 function renderServerJoinSetup() {
   const games = backendMyGames.map(game => {
     const gameId = game.gameId || game.id;
-    return `<div class="social-row"><span class="social-name">${esc(gameId || 'Game')}</span>
-      <span class="tag">${esc(game.status || 'WAITING')}</span>
-      <button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">Open</button></div>`;
+    const status = ['WAITING', 'ACTIVE', 'PAUSED'].includes(game.status) ? game.status : 'FINISHED';
+    const action = status === 'PAUSED'
+      ? `<button class="btn" onclick="backendRejoinPausedGame('${esc(gameId)}')">Rejoin</button>`
+      : `<button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">${status === 'ACTIVE' ? 'Continue' : 'Open'}</button>`;
+    return `<div class="social-row"><span class="social-name">Server game</span>
+      <span class="tag">${status}</span>${action}</div>`;
   }).join('');
 
   $('app').innerHTML = `<div class="setup">
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
-    <p class="sub">Join a server game</p>
+    <p class="sub">Game invitations</p>
     ${!accountUser ? accountPanelHTML() : ''}
-    <div class="panel acc-blue">
+    ${incomingGameInvitationsHTML() || '<div class="panel acc-orange"><p class="muted">No pending invitations.</p></div>'}
+    ${games ? `<div class="panel acc-yellow"><h2>My server games</h2>${games}</div>` : ''}
+    <details class="panel acc-blue">
+      <summary>Debug: join by game ID</summary>
       <label class="muted" for="serverGameId">Server game ID</label>
       <input type="text" id="serverGameId" value="${esc(backendJoinGameId)}" autocomplete="off">
-      <button class="btn" ${backendLobbyController.inFlight || !accountUser ? 'disabled' : ''}
-        onclick="backendJoinGame(document.getElementById('serverGameId').value)">${backendLobbyController.inFlight ? 'Joining…' : 'Join server game'}</button>
-      ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
+      <button class="btn alt" ${backendLobbyController.inFlight || !accountUser ? 'disabled' : ''}
+        onclick="backendJoinGame(document.getElementById('serverGameId').value)">${backendLobbyController.inFlight ? 'Joining…' : 'Join by ID'}</button>
+    </details>
+    ${backendSocialError || backendLobbyController.error ? `<p class="error" role="alert">${esc(backendSocialError || backendLobbyController.error)}</p>` : ''}
+    <div class="panel acc-green"><h2>Friends</h2>
+      <button class="btn alt" onclick="openFriendsScreen()">Manage friends</button>
     </div>
-    ${games ? `<div class="panel acc-yellow"><h2>My server games</h2>${games}</div>` : ''}
     <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
   </div>`;
 }

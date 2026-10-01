@@ -1,6 +1,6 @@
 # Monopoly: Custom Edition
 
-The game remains a static browser application. Vercel serves `index.html`, `game-engine.js`, `account-features.js`, and the files in `api/` as serverless Node.js functions. No always-running Node server is required. Neon persists accounts, profiles, preferences, friendships, and custom boards. PeerJS still transports live game actions.
+The game remains a static browser application. Vercel serves `index.html` and one consolidated API router as a serverless function. No always-running Node server is required. Neon persists accounts, profiles, preferences, friendships, custom boards, invitations, and authoritative server games. Legacy PeerJS code remains in the client; server-created games use the authoritative API.
 
 ## Services
 
@@ -23,11 +23,12 @@ Do not put these values in `index.html` or commit them. Changing `SESSION_SECRET
 ## Neon Setup and Migration
 
 1. Create a Neon project and database. Copy its pooled connection string with TLS enabled.
-2. For an existing database containing user data, make a Neon snapshot/branch backup first. Run the single reconciliation migration `db/migrations/006_production_schema_reconciliation.sql` in the Neon SQL Editor against the existing production database. It creates missing tables, adds missing columns with defaults, adds indexes and validates constraints; it contains no `DROP TABLE`, `TRUNCATE`, or data-deletion statements. It is transactional. If existing rows violate a required unique/check/foreign-key constraint, the transaction aborts and preserves the rows; inspect and resolve that specific inconsistency before retrying rather than deleting data.
-3. Migration `006_production_schema_reconciliation.sql` is the supported one-step upgrade for existing installs; it does not require manually running 002-005 first. Those earlier migration files document historical changes. The migration is designed to be re-runnable, including its 8-seat constraint update.
-4. To verify the exact production database before and after migration, link the repository with `npx vercel link`, pull the Production environment into a local ignored file with `npx vercel env pull .env.production --environment=production`, and run `node --env-file=.env.production scripts/check-db.js`. Alternatively, supply the production `DATABASE_URL` to `npm run db:check`. The checker opens a read-only connection and verifies current database/schema, expected application columns, indexes, foreign keys, and CHECK constraints. It never prints the connection string. Do not deploy the database-dependent application until the post-migration check exits successfully.
-5. Deploy the existing Vercel project after the post-migration check. Then test sign-in and `POST /api/game/create` on the production URL; the SQL checker verifies schema only and is not a substitute for that authenticated live request.
-6. `DATABASE_URL` is used by the app and checker; `SESSION_SECRET` is used for sessions; `BLOB_READ_WRITE_TOKEN` is only used by profile image upload/delete. Configure each variable for the applicable Vercel environments. No database credential belongs in browser code or committed files.
+2. For an existing database containing user data, make a Neon snapshot/branch backup first. If it has not already been applied, use `db/migrations/006_production_schema_reconciliation.sql` to reconcile the older schema without dropping tables or deleting rows.
+3. Before deploying current server multiplayer code, run `db/migrations/007_server_game_lifecycle_invitations.sql` in the Neon SQL Editor. This additive, re-runnable migration adds `games.invite_only`, `games.paused_at`, `games.finished_at`, `game_players.results_seen_at`, `game_invitations`, the PAUSED status check, and cascade foreign keys from `game_states`/`game_action_requests` to `games`. It retains existing rows, backfills existing FINISHED timestamps from `updated_at`, and aborts rather than removing data if it finds an unknown game status or invalid existing foreign-key references.
+4. Migrations 002-006 are historical upgrades; do not rerun 006 when it has already been applied. Apply 007 after the current production schema is at 006. For a fresh database, `db/schema.sql` already includes both the current schema and these lifecycle/invitation objects.
+5. To verify the exact production database before and after migration, link the repository with `npx vercel link`, pull the Production environment into a local ignored file with `npx vercel env pull .env.production --environment=production`, and run `node --env-file=.env.production scripts/check-db.js`. Alternatively, supply the production `DATABASE_URL` to `npm run db:check`. The checker opens a read-only connection and verifies current database/schema, expected application columns, indexes, foreign keys, and CHECK constraints. It never prints the connection string. Do not deploy the database-dependent application until the post-migration check exits successfully.
+6. Deploy the existing Vercel project after the post-migration check. Test signed-in lobby, invitations, Save & Quit, and resume against separate production accounts; the SQL checker and local tests do not establish production multiplayer correctness.
+7. `DATABASE_URL` is used by the app and checker; `SESSION_SECRET` is used for sessions; `BLOB_READ_WRITE_TOKEN` is only used by profile image upload/delete. Configure each variable for the applicable Vercel environments. No database credential belongs in browser code or committed files.
 
 ## Deploy
 
@@ -45,6 +46,10 @@ For local development, install dependencies with `npm install`, set the same env
 - `POST/DELETE /api/profile/avatar` uploads, replaces, or removes an image.
 - `GET/PATCH /api/settings` loads and saves volume, game, interface, camera, and other account preferences.
 - `GET /api/friends`, `GET /api/friends/search`, `GET/POST /api/friends/requests`, `PATCH /api/friends/requests/:id`, and `DELETE /api/friends/:id` manage account-owned friend relationships and recent online presence.
+- `GET/POST /api/game/invitations` lists pending invitations or lets a host invite a friend; `PATCH /api/game/invitations/:id` accepts or declines for the invited account only.
+- Server game status is `WAITING`, `ACTIVE`, `PAUSED`, or `FINISHED`. Leaving does not remove seats or delete unfinished games. New API-created matches are invite-only by default.
+- `POST /api/game/pause` locks and validates the current authoritative version, then marks the same match PAUSED; `POST /api/game/resume` continues that same game only after every original account has returned to its original seat.
+- `POST /api/game/delete` is host-only and transactionally deletes invitations, results, action requests, state, memberships, and the game. FINISHED games are cleaned up after every original player reads results, with an expiry cleanup on server-game list refresh.
 - `GET/POST /api/boards`, `GET/PATCH/DELETE /api/boards/:id`, and `POST /api/boards/:id/share` manage unlimited owner-scoped boards and friend-only independent copies.
 
 The existing game calls these same-origin endpoints. Account data is loaded from Postgres after session restoration and is not cached in localStorage. Custom property labels are keyed by the existing fixed square indexes, and the selected map is included in the game state sent to PeerJS clients.

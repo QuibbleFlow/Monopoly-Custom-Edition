@@ -18,7 +18,7 @@ module.exports = async function lobbyRoute(req, res) {
     return res.status(result.status).json({ error: result.error });
   }
 
-  return res.status(200).json({ ok: true, gameId: result.gameId, game: result.game, players: result.players, canStart: result.canStart });
+  return res.status(200).json({ ok: true, gameId: result.gameId, game: result.game, players: result.players, canStart: result.canStart, canResume: result.canResume });
 };
 
 module.exports.handleGetLobby = getLobby;

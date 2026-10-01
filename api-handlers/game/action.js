@@ -15,6 +15,7 @@ function statusForError(code) {
     case 'HOST_REQUIRED':
       return 403;
     case 'STALE_VERSION':
+    case 'GAME_NOT_ACTIVE':
       return 409;
     case 'INVALID_ACTION':
     case 'CLIENT_DICE_REJECTED':
@@ -154,6 +155,21 @@ async function executeGameAction({
 
   try {
     return await db.begin(async tx => {
+      const gameRows = await tx`SELECT status, host_account_id FROM games WHERE id = ${gameId} FOR UPDATE`;
+      const game = gameRows[0];
+      if (!game) {
+        return { ok: false, error: { code: 'GAME_NOT_FOUND', message: 'Game not found.' } };
+      }
+      if (requestId) {
+        const existingRows = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
+        if (existingRows && existingRows[0] && existingRows[0].result_json) {
+          return parseStoredResult(existingRows[0].result_json);
+        }
+      }
+      if (game.status !== 'ACTIVE') {
+        return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'This match is not active.' } };
+      }
+
       const rows = await tx`SELECT id, version, state, board FROM game_states WHERE id = ${gameId} FOR UPDATE`;
       const row = rows[0];
       if (!row) {
@@ -163,8 +179,7 @@ async function executeGameAction({
       const currentVersion = Number(row.version) || 1;
       const state = engine.deserializeState(row.state);
       if (action.type === 'SET_PAUSE' || action.type === 'GAME_TICK') {
-        const gameRows = await tx`SELECT host_account_id FROM games WHERE id = ${gameId}`;
-        if (!gameRows[0] || gameRows[0].host_account_id !== account.id) {
+        if (game.host_account_id !== account.id) {
           return { ok: false, error: { code: 'HOST_REQUIRED', message: 'Only the host can control game timers.' } };
         }
       }
@@ -173,13 +188,6 @@ async function executeGameAction({
       const actingPlayer = state.players.find(player => player.accountId === account.id);
       if (!actingPlayer) {
         return { ok: false, error: { code: 'PLAYER_NOT_IN_GAME', message: 'You are not a player in this game.' } };
-      }
-
-      if (requestId) {
-        const existingRows = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
-        if (existingRows && existingRows[0] && existingRows[0].result_json) {
-          return parseStoredResult(existingRows[0].result_json);
-        }
       }
 
       if (version !== currentVersion) {

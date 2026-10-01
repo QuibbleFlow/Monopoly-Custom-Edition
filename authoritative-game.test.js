@@ -30,6 +30,36 @@ test('authoritative state accepts newer versions and ignores equal or older vers
   assert.deepEqual(manager.state.dice, [0, 0]);
 });
 
+test('a same-version PAUSED status transition notifies clients without replacing their state', async () => {
+  const manager = createAuthoritativeGame({ fetch: async () => response({}) });
+  const state = { current: 0, dice: [3, 4], players: [{ id: 0, money: 1400 }] };
+  await manager.setAuthoritativeState(gameState(3, state));
+
+  assert.equal(await manager.applyAuthoritativeState({
+    ...gameState(3, state),
+    status: 'PAUSED',
+  }), true);
+  assert.equal(manager.status, 'PAUSED');
+  assert.equal(manager.version, 3);
+  assert.deepEqual(manager.state, state);
+});
+
+test('authoritative polling stops after the final state is delivered', async () => {
+  const manager = createAuthoritativeGame({
+    fetch: async () => response({}),
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+  });
+  await manager.setAuthoritativeState(gameState(1));
+  manager.startPolling('game-1');
+  assert.equal(manager.active, true);
+
+  await manager.applyAuthoritativeState({ ...gameState(2, { over: true }), status: 'FINISHED' });
+
+  assert.equal(manager.status, 'FINISHED');
+  assert.equal(manager.active, false);
+});
+
 test('PeerJS snapshots preserve authoritative roll fields but retain unrelated legacy state', async () => {
   const manager = createAuthoritativeGame({ fetch: async () => response({}) });
   await manager.setAuthoritativeState(gameState(3, {

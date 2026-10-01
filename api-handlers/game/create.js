@@ -19,6 +19,7 @@ module.exports = async function createGameRoute(req, res) {
     const result = await createGame({
       account,
       selectedBoardId: body.selectedBoardId || body.selected_board_id || null,
+      inviteOnly: body.inviteOnly !== false,
       db: sql,
     });
 

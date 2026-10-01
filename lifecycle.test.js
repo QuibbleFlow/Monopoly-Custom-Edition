@@ -2,10 +2,12 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const engine = require('./game-engine.js');
 
-const { createGame, joinGame, leaveGame, startGame, getLobby, getMyGames } = require('./api-handlers/game/lifecycle.js');
+const { createGame, joinGame, leaveGame, deleteGame, startGame, pauseGame, getLobby, getMyGames } = require('./api-handlers/game/lifecycle.js');
+const { resumeGame } = require('./api-handlers/game/saves.js');
 const { ensureDatabaseRuntimeState } = require('./lib/account.js');
 const { getGameState, handleGetGameStateRoute } = require('./api-handlers/game/state.js');
 const { executeGameAction } = require('./api-handlers/game/action.js');
+const { getFinalResults } = require('./lib/game-results.js');
 const { makeDbState, makeDb } = require('./test-support/mock-db.js');
 const apiRouter = require('./api/router.js');
 
@@ -38,6 +40,26 @@ test('consolidated router maps the hyphenated my-games URL to its handler', asyn
 
   assert.notEqual(response.statusCode, 404);
   assert.ok([401, 503].includes(response.statusCode));
+});
+
+test('consolidated router recognizes invitation, pause, and delete game endpoints', async () => {
+  for (const [method, url] of [
+    ['GET', '/api/game/invitations'],
+    ['POST', '/api/game/invitations'],
+    ['PATCH', '/api/game/invitations/30000000-0000-4000-8000-000000000001'],
+    ['POST', '/api/game/pause'],
+    ['POST', '/api/game/delete'],
+  ]) {
+    const response = {
+      statusCode: 200,
+      headers: {},
+      setHeader(name, value) { this.headers[name] = value; return this; },
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; },
+    };
+    await apiRouter({ method, url, headers: { cookie: '' }, body: {} }, response);
+    assert.ok([401, 503].includes(response.statusCode), `${method} ${url} should reach authentication`);
+  }
 });
 
 async function createActiveGame() {
@@ -74,8 +96,8 @@ test('joining a waiting lobby adds a deterministic seat and rejects duplicates o
   assert.equal(joined.players[1].seatIndex, 1);
 
   const duplicate = await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
-  assert.equal(duplicate.ok, false);
-  assert.equal(duplicate.error.code, 'ALREADY_IN_GAME');
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.players.length, 2);
 
   const invalid = await joinGame({ account: { id: 'account-c' }, gameId: '', db });
   assert.equal(invalid.ok, false);
@@ -97,18 +119,166 @@ test('a waiting lobby supports up to eight seats and rejects the ninth player', 
   assert.equal(db.state.players.filter(player => player.game_id === created.gameId).length, 8);
 });
 
-test('a member can leave and a host transfer or cleanup remains deterministic', async () => {
+test('a legacy waiting lobby fills a missing seat before start instead of colliding or shifting existing players', async () => {
+  const initial = makeDbState();
+  initial.games.push({ id: 'legacy-gap', host_account_id: 'account-a', status: 'WAITING', invite_only: false });
+  initial.players.push(
+    { game_id: 'legacy-gap', account_id: 'account-a', seat_index: 0 },
+    { game_id: 'legacy-gap', account_id: 'account-c', seat_index: 2 },
+  );
+  const db = makeDb(initial);
+
+  const joined = await joinGame({ account: { id: 'account-b' }, gameId: 'legacy-gap', db });
+  assert.equal(joined.ok, true);
+  assert.deepEqual(db.state.players.map(player => player.seat_index).sort(), [0, 1, 2]);
+
+  const started = await startGame({ account: { id: 'account-a' }, gameId: 'legacy-gap', db });
+  assert.equal(started.ok, true);
+  assert.deepEqual(started.state.players.map(player => player.accountId), ['account-a', 'account-b', 'account-c']);
+});
+
+test('leaving preserves waiting games and exact player membership', async () => {
   const db = makeDb();
   const created = await createGame({ account: { id: 'account-a' }, db });
   await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
 
   const left = await leaveGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
   assert.equal(left.ok, true);
-  assert.equal(left.game.hostAccountId, 'account-b');
+  assert.equal(left.game.hostAccountId, 'account-a');
+  assert.equal(left.membershipPreserved, true);
+  assert.equal(db.state.players.filter(player => player.game_id === created.gameId).length, 2);
 
   const empty = await createGame({ account: { id: 'account-c' }, db });
   const emptied = await leaveGame({ account: { id: 'account-c' }, gameId: empty.gameId, db });
-  assert.equal(emptied.deleted, true);
+  assert.equal(emptied.deleted, undefined);
+  assert.ok(db.state.games.some(game => game.id === empty.gameId));
+  assert.ok(db.state.players.some(player => player.game_id === empty.gameId && player.account_id === 'account-c'));
+});
+
+test('leaving an ACTIVE match keeps its game state and original seat membership', async () => {
+  const { db, gameId } = await createActiveGame();
+  const left = await leaveGame({ account: { id: 'account-b' }, gameId, db });
+
+  assert.equal(left.ok, true);
+  assert.equal(left.status, 'ACTIVE');
+  assert.equal(db.state.games[0].status, 'ACTIVE');
+  assert.equal(db.state.players.find(player => player.account_id === 'account-b').seat_index, 1);
+  assert.ok(db.state.states.some(state => state.id === gameId));
+});
+
+test('only the host can delete a game and deletion removes its dependent game records', async () => {
+  const { db, gameId } = await createActiveGame();
+  db.state.actionRequests.push({ game_id: gameId, request_id: 'old-request' });
+  db.state.results.push({ game_id: gameId, placements: [] });
+
+  const denied = await deleteGame({ account: { id: 'account-b' }, gameId, db });
+  assert.equal(denied.ok, false);
+  assert.equal(denied.error.code, 'HOST_REQUIRED');
+  assert.ok(db.state.games.some(game => game.id === gameId));
+
+  const deleted = await deleteGame({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(deleted.ok, true);
+  assert.equal(db.state.games.some(game => game.id === gameId), false);
+  assert.equal(db.state.players.some(player => player.game_id === gameId), false);
+  assert.equal(db.state.states.some(state => state.id === gameId), false);
+  assert.equal(db.state.actionRequests.some(request => request.game_id === gameId), false);
+  assert.equal(db.state.results.some(result => result.game_id === gameId), false);
+});
+
+test('finished games remain until every original player reads results, then clean up cascades', async () => {
+  const { db, gameId } = await createActiveGame();
+  db.state.games[0].status = 'FINISHED';
+  db.state.games[0].finished_at = new Date().toISOString();
+  db.state.results.push({
+    game_id: gameId,
+    winner_account_id: 'account-a',
+    placements: [
+      { accountId: 'account-a', placement: 1, money: 1500, netWorth: 1500 },
+      { accountId: 'account-b', placement: 2, money: 1200, netWorth: 1200 },
+    ],
+    created_at: new Date().toISOString(),
+  });
+  db.state.actionRequests.push({ game_id: gameId, request_id: 'finished-action' });
+
+  const firstView = await getFinalResults({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(firstView.ok, true);
+  assert.ok(db.state.games.some(game => game.id === gameId));
+
+  const secondView = await getFinalResults({ account: { id: 'account-b' }, gameId, db });
+  assert.equal(secondView.ok, true);
+  assert.equal(db.state.games.some(game => game.id === gameId), false);
+  assert.equal(db.state.players.some(player => player.game_id === gameId), false);
+  assert.equal(db.state.states.some(state => state.id === gameId), false);
+  assert.equal(db.state.results.some(result => result.game_id === gameId), false);
+  assert.equal(db.state.actionRequests.some(request => request.game_id === gameId), false);
+});
+
+test('My server games refresh removes only FINISHED matches older than thirty days', async () => {
+  const db = makeDb();
+  db.state.games.push(
+    { id: 'expired-finished', host_account_id: 'account-a', status: 'FINISHED', updated_at: '2020-01-01T00:00:00.000Z' },
+    { id: 'active-game', host_account_id: 'account-a', status: 'ACTIVE', finished_at: null },
+    { id: 'waiting-game', host_account_id: 'account-a', status: 'WAITING', finished_at: null },
+    { id: 'paused-game', host_account_id: 'account-a', status: 'PAUSED', finished_at: null },
+  );
+
+  const result = await getMyGames({ account: { id: 'account-a' }, db });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(db.state.games.map(game => game.id), ['active-game', 'waiting-game', 'paused-game']);
+});
+
+test('paused matches require every original account and resume the same state, version, and seats', async () => {
+  const { db, gameId } = await createActiveGame();
+  const originalState = engine.deserializeState(db.state.states[0].state);
+
+  const nonHostPause = await pauseGame({ account: { id: 'account-b' }, gameId, expectedVersion: 1, db });
+  assert.equal(nonHostPause.ok, false);
+  assert.equal(nonHostPause.error.code, 'HOST_REQUIRED');
+
+  const stalePause = await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 2, db });
+  assert.equal(stalePause.ok, false);
+  assert.equal(stalePause.error.code, 'STALE_VERSION');
+  assert.equal(db.state.games[0].status, 'ACTIVE');
+  assert.deepEqual(engine.deserializeState(db.state.states[0].state), originalState);
+
+  const paused = await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 1, db });
+  assert.equal(paused.ok, true);
+  assert.equal(db.state.games[0].status, 'PAUSED');
+  assert.equal(db.state.states[0].version, 1);
+  assert.ok(db.state.players.every(player => player.returned_at === null));
+
+  const earlyResume = await resumeGame({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(earlyResume.ok, false);
+  assert.equal(earlyResume.error.code, 'PLAYERS_MISSING');
+
+  const replacement = await joinGame({ account: { id: 'account-c' }, gameId, db });
+  assert.equal(replacement.ok, false);
+  assert.equal(replacement.error.code, 'ORIGINAL_PLAYER_REQUIRED');
+
+  const hostReturned = await joinGame({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(hostReturned.status, 'PAUSED');
+  await leaveGame({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(db.state.players.some(player => player.account_id === 'account-a' && player.game_id === gameId), true);
+  assert.equal(db.state.players.find(player => player.account_id === 'account-a').returned_at, null);
+  const stillMissing = await resumeGame({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(stillMissing.error.code, 'PLAYERS_MISSING');
+
+  await joinGame({ account: { id: 'account-a' }, gameId, db });
+  const playerReturned = await joinGame({ account: { id: 'account-b' }, gameId, db });
+  assert.equal(playerReturned.players.map(player => player.accountId).join(','), 'account-a,account-b');
+  assert.deepEqual(playerReturned.players.map(player => player.seatIndex), [0, 1]);
+
+  const nonHostResume = await resumeGame({ account: { id: 'account-b' }, gameId, db });
+  assert.equal(nonHostResume.error.code, 'HOST_REQUIRED');
+  const resumed = await resumeGame({ account: { id: 'account-a' }, gameId, db });
+  assert.equal(resumed.ok, true);
+  assert.equal(resumed.gameId, gameId);
+  assert.equal(resumed.status, 'ACTIVE');
+  assert.equal(resumed.version, 1);
+  assert.deepEqual(resumed.state, originalState);
+  assert.equal(db.state.games[0].status, 'ACTIVE');
+  assert.deepEqual(db.state.players.map(player => player.seat_index), [0, 1]);
 });
 
 test('only the host can start a waiting lobby with enough players and the engine state is initialized', async () => {
@@ -279,6 +449,24 @@ test('only the current authenticated player can roll and client-supplied dice ar
   assert.equal(clientDice.ok, false);
   assert.equal(clientDice.error.code, 'CLIENT_DICE_REJECTED');
   assert.equal(randomCalls, 0);
+  assert.equal(db.state.states[0].version, 1);
+});
+
+test('a paused match rejects stale-client actions without changing its stored version', async () => {
+  const { db, gameId } = await createActiveGame();
+  await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 1, db });
+
+  const result = await executeGameAction({
+    account: { id: 'account-a' },
+    gameId,
+    action: { type: 'ROLL_DICE' },
+    version: 1,
+    requestId: 'paused-action',
+    sql: db,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'GAME_NOT_ACTIVE');
   assert.equal(db.state.states[0].version, 1);
 });
 
