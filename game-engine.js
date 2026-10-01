@@ -13,7 +13,7 @@
       startMoney = 1500,
     } = options;
     if (!Array.isArray(names) || names.length < 2 || names.length > 8) {
-      throw new Error('A game requires between two and four players.');
+      throw new Error('A game requires between two and eight players.');
     }
     return {
       boardNames: { ...boardNames },

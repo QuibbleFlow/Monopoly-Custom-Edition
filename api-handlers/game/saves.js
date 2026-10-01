@@ -29,7 +29,8 @@ function validateSnapshot(snapshot, board) {
   try { state = engine.deserializeState(snapshot); } catch (error) { return { error: err('INVALID_SAVE_STATE', 'The saved game state is invalid.') }; }
   const spaces = Array.isArray(board?.spaces) ? board.spaces : [];
   const ids = state.players.map(player => player.id);
-  if (ids.length < 2 || ids.length > 4 || !Array.isArray(state.turnOrder) ||
+  const MAX_SAVE_PLAYERS = 8;
+  if (ids.length < 2 || ids.length > MAX_SAVE_PLAYERS || !Array.isArray(state.turnOrder) ||
       state.turnOrder.length !== ids.length || new Set(state.turnOrder).size !== ids.length ||
       !state.turnOrder.every(id => ids.includes(id)) || !Number.isInteger(state.current) ||
       state.current < 0 || state.current >= ids.length || !Number.isInteger(state.turn) || state.turn < 1 ||

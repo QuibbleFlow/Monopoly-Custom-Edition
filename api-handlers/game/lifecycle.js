@@ -140,8 +140,9 @@ async function joinGame({ account, gameId, db = database() }) {
 
     const total = await tx`SELECT COUNT(*)::int AS total FROM game_players WHERE game_id = ${normalizedGameId}`;
     const count = Number(total[0]?.total || 0);
-    if (count >= 4) {
-      return err('GAME_FULL', 'This game is full.', 409);
+    const MAX_PLAYERS = 8;
+    if (count >= MAX_PLAYERS) {
+      return err('GAME_FULL', `This game is full. Maximum ${MAX_PLAYERS} players allowed.`, 409);
     }
 
     const nextSeat = count;
