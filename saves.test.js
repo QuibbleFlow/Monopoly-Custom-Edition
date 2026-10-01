@@ -13,6 +13,10 @@ async function createActiveGame(db = makeDb()) {
   const created = await createGame({ account: { id: 'account-a' }, db });
   await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
   await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  const state = engine.deserializeState(db.state.states[0].state);
+  state.turnOrder = [0, 1];
+  state.current = 0;
+  db.state.states[0].state = engine.serializeState(state);
   return { db, gameId: created.gameId };
 }
 
