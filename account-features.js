@@ -16,7 +16,7 @@ function startAccountPresence() {
   heartbeat();
   accountPresenceTimer = setInterval(heartbeat, 45000);
   pollAccountNotifications();
-  accountNotificationTimer = setInterval(pollAccountNotifications, 4000);
+  accountNotificationTimer = setInterval(pollAccountNotifications, 3000);
 }
 
 function stopAccountPresence() {
@@ -26,6 +26,15 @@ function stopAccountPresence() {
   accountNotificationTimer = null;
   accountNotificationPollInFlight = false;
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && accountUser) {
+    // Refresh immediately when the player comes back to the tab instead of
+    // making them wait for the next background interval.
+    pollAccountNotifications();
+    if (setup.screen === 'friends') loadFriendsScreen();
+  }
+});
 
 function accountNotificationDomId(key) {
   return 'account-notification-' + String(key).replace(/[^A-Za-z0-9_-]/g, '_');
@@ -104,14 +113,14 @@ async function pollAccountNotifications() {
   if (!accountUser || accountNotificationPollInFlight || document.visibilityState === 'hidden') return;
   accountNotificationPollInFlight = true;
   try {
-    const [friendResult, gameResult] = await Promise.all([
-      accountRequest('/api/friends/requests'),
-      accountRequest('/api/game/invitations'),
-    ]);
-    const requests = Array.isArray(friendResult.requests) ? friendResult.requests : [];
-    const invitations = Array.isArray(gameResult.invitations) ? gameResult.invitations : [];
+    const social = await accountRequest('/api/friends/snapshot');
+    const friends = Array.isArray(social.friends) ? social.friends : [];
+    const requests = Array.isArray(social.requests) ? social.requests : [];
+    const invitations = Array.isArray(social.invitations) ? social.invitations : [];
 
+    friendsScreenState.friends = friends;
     friendsScreenState.requests = requests;
+    if (typeof backendFriends !== 'undefined') backendFriends = friends;
     if (typeof backendGameInvitations !== 'undefined') backendGameInvitations = invitations;
 
     for (const request of requests.filter(item => item.direction === 'incoming')) {
@@ -164,7 +173,7 @@ function openFriendsScreen() {
   clearInterval(friendsRefreshTimer);
   friendsRefreshTimer = setInterval(() => {
     if (setup.screen === 'friends') loadFriendsScreen();
-  }, 5000);
+  }, 3000);
 }
 
 function closeFriendsScreen() {
@@ -176,12 +185,11 @@ function closeFriendsScreen() {
 
 async function loadFriendsScreen() {
   try {
-    const [friendResult, requestResult] = await Promise.all([
-      accountRequest('/api/friends'),
-      accountRequest('/api/friends/requests'),
-    ]);
-    friendsScreenState.friends = friendResult.friends || [];
-    friendsScreenState.requests = requestResult.requests || [];
+    const social = await accountRequest('/api/friends/snapshot');
+    friendsScreenState.friends = social.friends || [];
+    friendsScreenState.requests = social.requests || [];
+    if (typeof backendFriends !== 'undefined') backendFriends = social.friends || [];
+    if (typeof backendGameInvitations !== 'undefined') backendGameInvitations = social.invitations || [];
     friendsScreenState.status = '';
   } catch (error) {
     friendsScreenState.status = error.message;
