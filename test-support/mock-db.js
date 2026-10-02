@@ -319,6 +319,16 @@ function makeDb(initial = makeDbState()) {
       }
       return [{ ok: true }];
     }
+    if (query.startsWith('UPDATE games SET status = $1, resume_save_id = NULL, started_at = COALESCE(started_at, now()), updated_at = now() WHERE id = $2')) {
+      const game = state.games.find(entry => entry.id === values[1]);
+      if (game) {
+        game.status = values[0];
+        game.resume_save_id = null;
+        game.started_at = game.started_at || new Date().toISOString();
+        game.updated_at = new Date().toISOString();
+      }
+      return [{ ok: true }];
+    }
     if (query.startsWith('UPDATE games SET status = $1, paused_at = now(), updated_at = now() WHERE id = $2 AND status = $3')) {
       const game = state.games.find(entry => entry.id === values[1] && entry.status === values[2]);
       if (game) {
@@ -413,6 +423,26 @@ function makeDb(initial = makeDbState()) {
     }
 
     // --- game_saves ---
+    if (query.startsWith('UPDATE game_saves SET status = $1, version = $2, state = $3::jsonb, board = $4::jsonb, updated_at = now() WHERE source_game_id = $5 AND owner_id = $6')) {
+      for (const save of state.saves) {
+        if (save.source_game_id !== values[4] || save.owner_id !== values[5]) continue;
+        save.status = values[0];
+        save.version = Number(values[1]);
+        save.state = typeof values[2] === 'string' ? JSON.parse(values[2]) : values[2];
+        save.board = typeof values[3] === 'string' ? JSON.parse(values[3]) : values[3];
+        save.updated_at = new Date().toISOString();
+      }
+      return [{ ok: true }];
+    }
+    if (query.startsWith('UPDATE game_saves SET source_game_id = $1, status = $2, updated_at = now() WHERE id = $3 AND owner_id = $4')) {
+      const save = state.saves.find(entry => entry.id === values[2] && entry.owner_id === values[3]);
+      if (save) {
+        save.source_game_id = values[0];
+        save.status = values[1];
+        save.updated_at = new Date().toISOString();
+      }
+      return [{ ok: true }];
+    }
     if (query.startsWith('SELECT id FROM game_saves WHERE id = $1 AND owner_id = $2 FOR UPDATE')) {
       return state.saves.filter(save => save.id === values[0] && save.owner_id === values[1]).map(save => ({ id: save.id }));
     }
