@@ -281,7 +281,7 @@
         return;
       }
       const gameHints = isGameScreen()
-        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.MENU}</kbd> Quick menu</span>`
+        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.RT}</kbd> Main action</span><span><kbd>${labels.MENU}</kbd> Quick menu</span>`
         : '';
       hud.innerHTML = `<span class="pad-name">🎮 ${escapeHtml(shortControllerName(connectedId))}</span>
         <span><kbd>${labels.A}</kbd> Select</span>
@@ -367,10 +367,10 @@
       connectedId = '';
       buttonWasDown = [];
       repeatState = Object.create(null);
-      doc.body.classList.remove('controller-input');
       updateHud();
       closeQuickMenu();
       closeKeyboard(false);
+      doc.body.classList.remove('controller-input');
       toast('Controller disconnected');
     }
 
@@ -649,7 +649,8 @@
       haptic(.11, 35);
     }
 
-    function keyboardCharacters(shifted) {
+    function keyboardCharacters(shifted, input = null) {
+      if (input && input.type === 'number') return [...'1234567890'.split(''), '.', '-'];
       const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(ch => shifted ? ch : ch.toLowerCase());
       return [...letters, ...'1234567890'.split(''), '@', '.', '_', '-', "'", '#'];
     }
@@ -687,7 +688,7 @@
 
       const keys = doc.createElement('div');
       keys.className = 'controller-keyboard-keys';
-      for (const char of keyboardCharacters(state.shifted)) {
+      for (const char of keyboardCharacters(state.shifted, state.input)) {
         const key = doc.createElement('button');
         key.className = 'controller-key';
         key.type = 'button';
@@ -775,6 +776,25 @@
       return false;
     }
 
+    function browseBoard(delta) {
+      if (!isGameScreen() || keyboardState || quickMenuOpen) return false;
+      let current = doc.activeElement;
+      let index = current && current.id && /^cell\d+$/.test(current.id)
+        ? Number(current.id.slice(4))
+        : null;
+      if (!Number.isInteger(index)) {
+        const first = doc.getElementById('cell0');
+        if (!first || !visible(first)) return false;
+        index = 0;
+      } else {
+        index = (index + delta + 40) % 40;
+      }
+      const cell = doc.getElementById('cell' + index);
+      if (!cell || !visible(cell)) return false;
+      focusElement(cell);
+      return true;
+    }
+
     function shoulder(direction) {
       const scope = activeScope();
       const candidates = Array.from(scope.querySelectorAll(
@@ -848,6 +868,8 @@
       let used = false;
       const x = pad.axes && Number.isFinite(pad.axes[0]) ? pad.axes[0] : 0;
       const y = pad.axes && Number.isFinite(pad.axes[1]) ? pad.axes[1] : 0;
+      const rx = pad.axes && Number.isFinite(pad.axes[2]) ? pad.axes[2] : 0;
+      const ry = pad.axes && Number.isFinite(pad.axes[3]) ? pad.axes[3] : 0;
       const up = pressed(pad, STANDARD.UP) || y < -DEADZONE;
       const down = pressed(pad, STANDARD.DOWN) || y > DEADZONE;
       const left = pressed(pad, STANDARD.LEFT) || x < -DEADZONE;
@@ -862,6 +884,15 @@
         if (!horizontalControl(1)) moveFocus(1, 0);
         used = true;
       }
+
+      // Right stick is dedicated to browsing the physical board ring. It
+      // never commits an action: move around the 40 spaces, then press
+      // Select to open the focused deed/square. Horizontal moves one square;
+      // vertical jumps one side (10 squares).
+      if (repeatGate('board-left', rx < -0.72, timestamp)) { used = browseBoard(-1) || used; }
+      else if (repeatGate('board-right', rx > 0.72, timestamp)) { used = browseBoard(1) || used; }
+      if (repeatGate('board-up', ry < -0.72, timestamp)) { used = browseBoard(10) || used; }
+      else if (repeatGate('board-down', ry > 0.72, timestamp)) { used = browseBoard(-10) || used; }
 
       if (edge(pad, STANDARD.A)) { activateFocused(); used = true; }
       if (edge(pad, STANDARD.B)) { contextualBack(); used = true; }
@@ -880,7 +911,16 @@
       if (edge(pad, STANDARD.MENU)) { openQuickMenu(); used = true; }
       if (edge(pad, STANDARD.VIEW)) {
         updateHud();
-        toast(`${labels.A} Select · ${labels.B} Back · D-pad Navigate`);
+        toast(`${labels.A} Select · ${labels.B} Back · D-pad Navigate · Right stick Browse board`);
+        used = true;
+      }
+      if (edge(pad, STANDARD.LS)) {
+        if (isGameScreen()) {
+          const boardCell = doc.getElementById('cell0');
+          if (boardCell) focusElement(boardCell);
+        } else {
+          ensureFocused();
+        }
         used = true;
       }
 
