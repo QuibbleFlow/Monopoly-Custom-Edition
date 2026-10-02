@@ -24,18 +24,54 @@ function makeFriendsDb() {
     const query = strings.reduce((text, part, index) => text + part + (index < values.length ? `$${index + 1}` : ''), '')
       .replace(/\s+/g, ' ').trim();
 
-    if (query.startsWith('INSERT INTO friend_requests')) {
+    if (query.startsWith('SELECT id, username FROM accounts WHERE lower(username) = lower($1)')) {
+      const target = accounts.find(account => account.username.toLowerCase() === String(values[0]).toLowerCase());
+      return target ? [target] : [];
+    }
+
+    if (query.startsWith('SELECT 1 FROM friendships WHERE account_low = LEAST($1::uuid, $2::uuid)')) {
+      const pair = [values[0], values[1]].sort();
+      return friendships.some(friendship => friendship.account_low === pair[0] && friendship.account_high === pair[1])
+        ? [{ '?column?': 1 }]
+        : [];
+    }
+
+    if (query.startsWith('SELECT id, sender_id, recipient_id, status, created_at FROM friend_requests WHERE status =')) {
+      const pair = [values[0], values[1]].sort();
+      const pending = requests.find(request => request.status === 'pending' &&
+        [request.sender_id, request.recipient_id].sort().join(':') === pair.join(':'));
+      return pending ? [pending] : [];
+    }
+
+    if (query.startsWith('UPDATE friend_requests SET status = $1, responded_at = now() WHERE id = $2 AND status =')) {
+      const request = requests.find(item => item.id === values[1] && item.status === 'pending');
+      if (!request) return [];
+      request.status = values[0];
+      request.responded_at = new Date().toISOString();
+      return [{ id: request.id }];
+    }
+
+    if (query.startsWith('INSERT INTO friendships (account_low, account_high) VALUES ( LEAST($1::uuid, $2::uuid), GREATEST($3::uuid, $4::uuid) ) ON CONFLICT DO NOTHING')) {
+      const pair = [values[0], values[1]].sort();
+      if (!friendships.some(friendship => friendship.account_low === pair[0] && friendship.account_high === pair[1])) {
+        friendships.push({ account_low: pair[0], account_high: pair[1] });
+      }
+      return [{ account_low: pair[0], account_high: pair[1] }];
+    }
+
+    if (query.startsWith('INSERT INTO friend_requests (sender_id, recipient_id) VALUES ($1, $2) RETURNING')) {
       const senderId = values[0];
-      const target = accounts.find(account => account.username.toLowerCase() === values[1].toLowerCase());
-      if (!target || target.id === values[2]) return [];
-      const pair = [senderId, target.id].sort();
-      if (friendships.some(friendship => friendship.account_low === pair[0] && friendship.account_high === pair[1])) return [];
-      if (requests.some(request => request.status === 'pending' &&
-        [request.sender_id, request.recipient_id].sort().join(':') === pair.join(':'))) return [];
+      const recipientId = values[1];
       requestId++;
-      const request = { id: `30000000-0000-4000-8000-${String(requestId).padStart(12, '0')}`, sender_id: senderId, recipient_id: target.id, status: 'pending' };
+      const request = {
+        id: `30000000-0000-4000-8000-${String(requestId).padStart(12, '0')}`,
+        sender_id: senderId,
+        recipient_id: recipientId,
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      };
       requests.push(request);
-      return [{ id: request.id, recipient_id: target.id, status: request.status, created_at: new Date().toISOString() }];
+      return [request];
     }
 
     if (query.startsWith('WITH updated AS ( UPDATE friend_requests SET status = $1, responded_at = now() WHERE id = $2 AND recipient_id = $3 AND status =')) {
@@ -61,6 +97,7 @@ function makeFriendsDb() {
 
     throw new Error(`Unexpected friend SQL: ${query}`);
   };
+  sql.begin = async callback => callback(sql);
 
   return { sql, requests, friendships };
 }
@@ -82,11 +119,11 @@ function dependencies(db, accountId) {
   };
 }
 
-test('friend requests reject self and duplicates, accept only for recipient, and create one friendship', async () => {
+test('friend requests are idempotent, accept only for recipient, and create one friendship', async () => {
   const db = makeFriendsDb();
   const request = response();
   await sendRequest({ method: 'POST', headers: {}, body: { username: 'Ada' } }, request, dependencies(db, ids.ada));
-  assert.equal(request.statusCode, 409);
+  assert.equal(request.statusCode, 400);
   assert.equal(db.requests.length, 0);
 
   const sent = response();
@@ -96,7 +133,8 @@ test('friend requests reject self and duplicates, accept only for recipient, and
 
   const duplicate = response();
   await sendRequest({ method: 'POST', headers: {}, body: { username: 'bea' } }, duplicate, dependencies(db, ids.ada));
-  assert.equal(duplicate.statusCode, 409);
+  assert.equal(duplicate.statusCode, 200);
+  assert.equal(duplicate.body.alreadyPending, true);
   assert.equal(db.requests.length, 1);
 
   const unauthorized = response();
@@ -112,7 +150,24 @@ test('friend requests reject self and duplicates, accept only for recipient, and
 
   const duplicateFriendRequest = response();
   await sendRequest({ method: 'POST', headers: {}, body: { username: 'Bea' } }, duplicateFriendRequest, dependencies(db, ids.ada));
-  assert.equal(duplicateFriendRequest.statusCode, 409);
+  assert.equal(duplicateFriendRequest.statusCode, 200);
+  assert.equal(duplicateFriendRequest.body.alreadyFriends, true);
+  assert.equal(db.friendships.length, 1);
+});
+
+test('crossed friend requests automatically become a friendship', async () => {
+  const db = makeFriendsDb();
+
+  const first = response();
+  await sendRequest({ method: 'POST', headers: {}, body: { username: 'Bea' } }, first, dependencies(db, ids.ada));
+  assert.equal(first.statusCode, 201);
+  assert.equal(db.requests.length, 1);
+
+  const crossed = response();
+  await sendRequest({ method: 'POST', headers: {}, body: { username: 'Ada' } }, crossed, dependencies(db, ids.bea));
+  assert.equal(crossed.statusCode, 200);
+  assert.equal(crossed.body.autoAccepted, true);
+  assert.equal(db.requests[0].status, 'accepted');
   assert.equal(db.friendships.length, 1);
 });
 
