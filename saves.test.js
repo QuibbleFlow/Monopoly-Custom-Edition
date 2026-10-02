@@ -113,8 +113,10 @@ test('listSaves requires authentication and never returns another account\'s sav
   await saveGame({ account: { id: 'account-a' }, gameId, name: 'Save A', db });
 
   const ownerList = await listSaves({ account: { id: 'account-a' }, db });
-  assert.equal(ownerList.saves.length, 1);
-  assert.equal(ownerList.saves[0].name, 'Save A');
+  // Starting the match creates its automatic save slot. The explicit save
+  // below is a second named snapshot owned by the same account.
+  assert.equal(ownerList.saves.length, 2);
+  assert.ok(ownerList.saves.some(save => save.name === 'Save A'));
 
   const strangerList = await listSaves({ account: { id: 'account-z' }, db });
   assert.equal(strangerList.saves.length, 0);
