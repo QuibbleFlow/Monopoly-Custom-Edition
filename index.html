@@ -284,7 +284,51 @@ input:focus-visible {
 .corner-tl { left: var(--sp3); }
 .corner-tr { right: var(--sp3); }
 
-
+/* Account/social notifications stay outside #app so normal screen renders do
+   not destroy them. They use no blur/filter effects, keeping them cheap to
+   composite while the 3D board is animating. */
+.account-notification-tray {
+  position: fixed;
+  right: var(--sp3);
+  bottom: var(--sp3);
+  z-index: 90;
+  width: min(360px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp2);
+  pointer-events: none;
+}
+.account-notification {
+  pointer-events: auto;
+  background: #fff;
+  color: #101a14;
+  border: 2px solid #101a14;
+  border-radius: 12px;
+  box-shadow: 0 5px 16px rgba(0,0,0,.28);
+  padding: 10px 12px;
+  animation: account-notification-in 180ms ease-out;
+}
+.account-notification-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-notification-title { flex: 1; font-weight: 900; }
+.account-notification-message { margin-top: 4px; font-size: .9rem; }
+.account-notification-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.account-notification-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+  padding: 0 3px;
+}
+@keyframes account-notification-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* Page layout: the board stage, given as much room as the screen
    allows. flex: 1 + min-height: 0 lets this row grow to fill the
@@ -4741,13 +4785,14 @@ function startBackendLobbyPolling(gameId) {
   if (!gameId) return;
   if (backendLobbyPollId && backendLobby && backendLobby.gameId === gameId) return;
   stopBackendLobbyPolling();
-  // Check immediately, then keep a short fallback poll. This removes the
-  // guaranteed one-second wait after another player changes lobby state.
+  // Poll quickly enough for a responsive lobby, but never rebuild the full
+  // setup DOM unless roster/status data changed. Re-rendering the whole lobby
+  // four times per second was a major source of visible frame drops.
   backendRefreshLobby(gameId, { fromPoll: true });
   backendLobbyPollId = setInterval(() => {
     if (document.visibilityState === 'hidden' || backendLobbyPollInFlight || !backendLobby || backendLobby.gameId !== gameId) return;
     backendRefreshLobby(gameId, { fromPoll: true });
-  }, 250);
+  }, 750);
 }
 
 async function activateBackendGame(payload) {
@@ -4786,6 +4831,16 @@ async function refreshBackendMyGames() {
 }
 
 function backendCreateGame() {
+  backendLobby = null;
+  setup.screen = 'serverCreate';
+  renderSetup();
+  if (accountUser) {
+    refreshBackendMyGames().then(() => {
+      if (setup.screen === 'serverCreate') renderSetup();
+    });
+  }
+}
+function backendStartNewMatch() {
   backendLobby = null;
   return backendLobbyController.create(selectedHostBoard ? selectedHostBoard.id : null);
 }
@@ -4938,9 +4993,30 @@ async function sendLobbyFriendRequest(username) {
   renderSetup();
 }
 
+function backendLobbyRenderSignature(lobby) {
+  if (!lobby) return '';
+  const game = lobby.game || {};
+  return JSON.stringify({
+    gameId: lobby.gameId || '',
+    status: game.status || '',
+    name: game.name || '',
+    host: game.hostAccountId || '',
+    resumeSaveId: game.resumeSaveId || null,
+    canStart: !!lobby.canStart,
+    canResume: !!lobby.canResume,
+    players: (lobby.players || []).map(player => [
+      player.accountId || player.account_id || '',
+      Number(player.seatIndex ?? player.seat_index ?? 0),
+      player.username || player.name || '',
+      player.returnedAt || player.returned_at || null,
+    ]),
+  });
+}
+
 async function backendRefreshLobby(gameId, options = {}) {
   if (!gameId || backendLobbyPollInFlight) return;
   const previousStatus = backendLobby?.gameId === gameId ? backendLobby?.game?.status : null;
+  const previousSignature = backendLobbyRenderSignature(backendLobby);
   backendLobbyPollInFlight = true;
   try {
     const result = await backendGameRequest(`/api/game/lobby?gameId=${encodeURIComponent(gameId)}`);
@@ -4965,7 +5041,8 @@ async function backendRefreshLobby(gameId, options = {}) {
       if (state) window.authoritativeGame.startPolling(result.gameId);
       return;
     }
-    renderSetup();
+    const nextSignature = backendLobbyRenderSignature(backendLobby);
+    if (!options.fromPoll || nextSignature !== previousSignature) renderSetup();
   } catch (error) {
     if (!options.fromPoll) setAccountStatus(error.message);
   } finally {
@@ -5060,6 +5137,38 @@ function incomingGameInvitationsHTML() {
   </div>`;
 }
 
+function renderServerCreateSetup() {
+  const saves = backendSaves.length
+    ? backendSaves.map(save => `<div class="social-row">
+        <span class="social-name">${esc(save.name)}</span>
+        <span class="tag">${(save.players || []).length} players</span>
+        <span class="tag">${esc(new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleString())}</span>
+        <button class="btn alt" onclick="backendResumeFromSave('${esc(save.saveId)}')">Resume</button>
+      </div>`).join('')
+    : '<p class="muted">No saved matches yet.</p>';
+
+  $('app').innerHTML = `<div class="setup">
+    <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
+    <p class="sub">Create game</p>
+    ${!accountUser ? accountPanelHTML() : ''}
+    <div class="panel acc-blue">
+      <h2>Start a new match</h2>
+      <p class="muted">This creates the new multiplayer match only after you choose it. Your older saves stay listed below.</p>
+      <p class="muted">Board: ${esc(selectedHostBoard ? selectedHostBoard.name : 'Classic board')}</p>
+      <div class="row">
+        <button class="btn" ${!accountUser || backendLobbyController.inFlight ? 'disabled' : ''} onclick="backendStartNewMatch()">${backendLobbyController.inFlight ? 'Starting…' : 'Start a new match'}</button>
+        <button class="btn alt" type="button" onclick="openBoardsScreen(true)">Choose board</button>
+      </div>
+      ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
+    </div>
+    <div class="panel acc-green">
+      <h2>Old save files</h2>
+      ${saves}
+    </div>
+    <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
+  </div>`;
+}
+
 function renderServerLobbySetup() {
   const lobby = backendLobby;
   const status = lobby?.game?.status || 'WAITING';
@@ -5099,7 +5208,7 @@ function renderServerLobbySetup() {
       <h2>Server multiplayer</h2>
       ${backendLobbyController.inFlight
         ? '<p class="muted" role="status">Creating server game…</p>'
-        : `<button class="btn" onclick="backendCreateGame()">Create server game</button>`}
+        : `<button class="btn" onclick="backendStartNewMatch()">Start a new match</button>`}
       ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
     </div>`;
   const gamesPanel = backendMyGames.length ? `
@@ -5467,6 +5576,7 @@ function renderSetup() {
   if (setup.screen === 'join') { renderJoinSetup(); return; }
   if (setup.screen === 'serverLobby') { renderServerLobbySetup(); return; }
   if (setup.screen === 'serverJoin') { renderServerJoinSetup(); return; }
+  if (setup.screen === 'serverCreate') { renderServerCreateSetup(); return; }
   if (setup.screen === 'friends') { renderFriendsScreen(); return; }
   if (setup.screen === 'boards') { renderBoardsScreen(); return; }
   if (setup.screen === 'boardEditor') { renderBoardEditorScreen(); return; }
