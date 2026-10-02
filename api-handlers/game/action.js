@@ -1,3 +1,4 @@
+const { syncGameAvatars } = require('../../lib/game-profiles');
 const engine = require('../../game-engine.js');
 const boardData = require('../../game-board.js');
 const cardData = require('../../game-cards.js');
@@ -187,6 +188,7 @@ async function executeGameAction({
 
       const currentVersion = Number(row.version) || 1;
       const state = engine.deserializeState(row.state);
+      await syncGameAvatars(tx, state);
       if (action.type === 'SET_PAUSE' || action.type === 'GAME_TICK') {
         if (game.host_account_id !== account.id) {
           return { ok: false, error: { code: 'HOST_REQUIRED', message: 'Only the host can control game timers.' } };

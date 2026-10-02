@@ -1,3 +1,4 @@
+const { syncGameAvatars } = require('../../lib/game-profiles');
 const engine = require('../../game-engine.js');
 const { database, noStore, requireAccount } = require('../../lib/account');
 
@@ -126,6 +127,7 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
   }
 
   const state = engine.deserializeState(row.state);
+  await syncGameAvatars(db, state);
   let events = [];
   let actionResult = row.result_json;
   if (typeof actionResult === 'string') {

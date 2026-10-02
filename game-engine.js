@@ -13,7 +13,7 @@
 
   function createState(options) {
     const {
-      names, colors = [], accountIds = [], boardNames = {}, boardSize = 40,
+      names, colors = [], accountIds = [], avatarUrls = [], boardNames = {}, boardSize = 40,
       startMoney = 1500,
     } = options;
     if (!Array.isArray(names) || names.length < 2 || names.length > 8) {
@@ -27,6 +27,7 @@
         id,
         name,
         accountId: accountIds[id] == null ? null : accountIds[id],
+        avatarUrl: avatarUrls[id] || null,
         color: colors[id] || DEFAULT_COLORS[id],
         money: startMoney,
         pos: 0,

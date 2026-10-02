@@ -37,6 +37,7 @@ function makeDb(initial = makeDbState()) {
       return result + part + value;
     }, '').replace(/\s+/g, ' ').trim();
 
+    if (query.startsWith('SELECT id, avatar_url FROM accounts WHERE id = ANY')) return values[0].filter(id => state.accounts[id]).map(id => ({ id, avatar_url: state.accounts[id].avatar_url || null }));
     if (query.startsWith('SELECT g.status, EXISTS ( SELECT 1 FROM game_players gp')) {
       const accountId = values[0];
       const knownVersion = values.length > 2 && values[1] != null ? Number(values[1]) : null;

@@ -303,7 +303,7 @@ async function startGame({ account, gameId, db = database() }) {
       return err('USE_RESUME_ENDPOINT', 'This lobby resumes a saved game; use the resume endpoint to start it.', 409);
     }
 
-    const players = await tx`SELECT gp.account_id, gp.seat_index, a.username
+    const players = await tx`SELECT gp.account_id, gp.seat_index, a.username, a.avatar_url
       FROM game_players gp
       JOIN accounts a ON a.id = gp.account_id
       WHERE gp.game_id = ${normalizedGameId}
@@ -333,7 +333,7 @@ async function startGame({ account, gameId, db = database() }) {
       boardNames = board.property_names;
       cardDecks = board.card_decks;
     }
-    let state = engine.createState({ names, accountIds, boardSize: boardData.spaces.length, boardNames, cardDecks });
+    let state = engine.createState({ names, accountIds, avatarUrls: players.map(player => player.avatar_url), boardSize: boardData.spaces.length, boardNames, cardDecks });
 
     // Match the original game's start flow, but choose the order on the
     // authoritative server so every browser receives the exact same result.
@@ -362,7 +362,7 @@ async function startGame({ account, gameId, db = database() }) {
       accountId: player.account_id,
       seatIndex: Number(player.seat_index),
       username: player.username,
-      avatarUrl: null,
+      avatarUrl: player.avatar_url || null,
     }));
     await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
       VALUES (${saveId}, ${account.id}, ${normalizedGameId}, ${game.name || 'Server game'}, ${'SAVED'}, ${1},

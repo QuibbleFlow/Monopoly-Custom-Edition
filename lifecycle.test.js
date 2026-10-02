@@ -1017,3 +1017,24 @@ test('starting a selected custom board snapshots its decks independently of futu
   stored.__cardDecksV1.chance[0].value = 999;
   assert.equal(engine.deserializeState(base.state.states[0].state).cardDecks.chance[0].value, 77);
 });
+
+test('avatars enter new matches and saves, refresh on actions, and disappear after removal', async () => {
+  const db = makeDb();
+  db.state.accounts['account-a'].avatar_url = 'https://example.com/alice.png';
+  db.state.accounts['account-b'].avatar_url = 'https://example.com/bob.png';
+  const created = await createGame({ account: { id: 'account-a' }, db });
+  await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
+  await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  const snapshot = engine.deserializeState(db.state.states[0].state);
+  assert.equal(snapshot.players[0].avatarUrl, 'https://example.com/alice.png');
+  assert.equal(snapshot.players[1].avatarUrl, 'https://example.com/bob.png');
+  const savedPlayers = typeof db.state.saves[0].players === 'string' ? JSON.parse(db.state.saves[0].players) : db.state.saves[0].players;
+  assert.equal(savedPlayers[0].avatarUrl, 'https://example.com/alice.png');
+  editStoredGameState(db, state => { state.turnOrder = [0, 1]; state.current = 0; });
+  db.state.accounts['account-a'].avatar_url = 'https://example.com/new.png';
+  db.state.accounts['account-b'].avatar_url = null;
+  const result = await executeGameAction({ account: { id: 'account-a' }, gameId: created.gameId, action: { type: 'ROLL_DICE' }, version: 1, requestId: 'avatar-refresh', sql: db, random: () => 0 });
+  assert.equal(result.ok, true);
+  assert.equal(result.state.players[0].avatarUrl, 'https://example.com/new.png');
+  assert.equal(result.state.players[1].avatarUrl, null);
+});

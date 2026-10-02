@@ -1342,6 +1342,8 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
 }
 
 
+
+.player-avatar-image{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}.player-avatar-image[hidden]{display:none}.avatar,.tk-dot{overflow:hidden}.pill .avatar{flex-shrink:0}
 </style>
 </head>
 
@@ -1684,14 +1686,14 @@ function inkFor(hex) {
   return 1.05 / (L + 0.05) > (L + 0.05) / 0.056 ? '#fff' : '#111';
 }
 
-function newGame(names, colors, boardNames = {}, accountIds = [], cardDecks) {
+function newGame(names, colors, boardNames = {}, accountIds = [], cardDecks, avatarUrls = []) {
   // Player "id" is a fixed seat number (0 = host, 1..7 = guests in join
   // order) that never changes. Turn ORDER is a separate shuffled list of
   // ids called turnOrder; game.current is an index into turnOrder, not a
   // player id. This keeps each person's seat stable in online play even
   // though who goes first is random.
   game = MonopolyGameEngine.createState({
-    names, colors: colors || PLAYER_COLORS, accountIds, boardNames, cardDecks,
+    names, colors: colors || PLAYER_COLORS, accountIds, avatarUrls, boardNames, cardDecks,
     boardSize: BOARD_SIZE, startMoney: START_MONEY,
   });
 }
@@ -2340,7 +2342,7 @@ async function animateDice(a, b) {
 // them slide (see .tk in the CSS).
 function initTokens() {
   $('tokens').innerHTML = game.players.map(p =>
-    `<div class="tk" id="tk${p.id}" style="--pc:${p.color}"><div class="tk-dot">${p.id + 1}</div></div>`).join('');
+    `<div class="tk" id="tk${p.id}" style="--pc:${p.color}"><div class="tk-dot">${playerAvatarContent(p, p.id + 1)}</div></div>`).join('');
 }
 function updateTokens() {
   const groups = {};
@@ -2360,6 +2362,9 @@ function updateTokens() {
     if (n > 1) { const r = n > 4 ? 2.7 : 1.7; const ang = (k / n) * Math.PI * 2 - Math.PI / 2; dx = Math.cos(ang) * r; dy = Math.sin(ang) * r; }
     el.style.left = (c.x + dx) + '%'; el.style.top = (c.y + dy) + '%';
     el.style.opacity = (tokenPos[p.id] === hideSq) ? '0' : '1';
+    const dot = el.querySelector('.tk-dot');
+    const avatar = playerAvatarUrl(p);
+    if (dot.dataset.avatar !== (avatar || '')) { dot.innerHTML = playerAvatarContent(p, p.id + 1); dot.dataset.avatar = avatar || ''; }
     el.classList.toggle('active', p.id === cur().id && !game.over);
   });
 }
@@ -3280,7 +3285,7 @@ function updateHud() {
     const popCls = diff > 0 ? 'pop-up' : diff < 0 ? 'pop-down' : '';
     return `<div class="pill ${p.id === cur().id && !game.over ? 'current' : ''} ${p.bankrupt ? 'out' : ''} ${flashCls}" id="pill${p.id}" style="--pc:${p.color}">
       <span class="order" title="${ordinal(turnPos + 1)} in turn order" aria-label="${ordinal(turnPos + 1)} in turn order">${turnPos + 1}</span>
-      <span class="avatar">${esc(initial)}</span>
+      <span class="avatar">${playerAvatarContent(p, initial)}</span>
       <span class="ptext"><span class="pname">${esc(p.name)}${p.inJail ? ' (in jail)' : ''}${offline ? ' (offline)' : ''}</span><span class="pmoney ${popCls}">${fmt(p.money)}</span></span>
       <span class="badge" title="Properties owned" aria-label="${owned} properties owned">${owned}</span>
     </div>`;
@@ -3845,7 +3850,7 @@ function introHTML() {
   const it = ui.intro;
   return `<div class="intro"><h2>Determining player order...</h2>
     <div class="intro-row">${it.rows.map(r => `
-      <div><div class="avatar big" style="--pc:${r.color}">${esc((r.name.trim().charAt(0) || '?').toUpperCase())}</div>
+      <div><div class="avatar big" style="--pc:${r.color}">${playerAvatarContent(game.players.find(p => p.name === r.name && p.color === r.color) || r, (r.name.trim().charAt(0) || '?').toUpperCase())}</div>
       <div>${esc(r.name)}</div>
       <div class="rank ${r.fresh ? 'pop' : ''}">${r.shown ? ordinal(r.rank) : '...'}</div></div>`).join('')}</div>
     <button class="btn alt" onclick="skipIntro()">Skip</button></div>`;
@@ -4296,6 +4301,13 @@ function hostWireGuestConn(conn) {
     if (!data || typeof data !== 'object') return;
     if (data.t !== 'hello') mpTrace('in', data.t, { name: data.name, pid: data.pid });
     if (data.t === 'hello') hostHandleHello(conn, data);
+    else if (data.t === 'profile') {
+      const seat = hostState().roster.find(player => player.conn === conn);
+      if (seat && (data.avatarUrl === null || (typeof data.avatarUrl === 'string' && data.avatarUrl.length < 360000 && /^(https:\/\/|data:image\/(png|jpeg|webp);base64,)/.test(data.avatarUrl)))) {
+        applyPeerAvatar(seat.pid, data.avatarUrl);
+        hostSend({ t: 'profile', pid: seat.pid, avatarUrl: data.avatarUrl });
+      }
+    }
     else if (data.t === 'act') hostRun(data.name, data.args || [], data.pid, data);
     else if (data.t === 'leave') hostHandleLeave(conn);
   });
@@ -4372,7 +4384,7 @@ async function hostStartOnline() {
   const names = seats.map(r => r.name);
   const colors = seats.map((r, i) => PLAYER_COLORS[i]);
   const accountIds = seats.map(r => r.accountId || null);
-  await hostRun('beginGame', [names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, accountIds, selectedHostBoard?.card_decks], net.myPid);
+  await hostRun('beginGame', [names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, accountIds, selectedHostBoard?.card_decks, seats.map(r => r.avatarUrl)], net.myPid);
 }
 // Lets the host force an unresponsive (disconnected) player's turn to
 // end, so the game is not stuck waiting for someone who is gone.
@@ -4438,6 +4450,7 @@ function joinHandleData(data) {
   mpTrace('in', data.t, { name: data.name, pid: data.pid, seq: data.seq });
   if (data.t === 'welcome') { net.myPid = data.pid; }
   else if (data.t === 'error') { j.error = data.message || 'The host declined the connection.'; if (!game) renderSetup(); }
+  else if (data.t === 'profile') { applyPeerAvatar(data.pid, data.avatarUrl); if (!game) renderSetup(); }
   else if (data.t === 'roster') { j.roster = data.seats; if (!game) renderSetup(); }
   else if (data.t === 'conn') { connStatus = data.connFlags || {}; if (game) render(); }
   else if (data.t === 'sync') applySyncSnapshot(data);
@@ -4845,7 +4858,7 @@ function setName(i, v) { setup.names[i] = v; }   // no redraw so typing is not i
 async function startGame() {
   const names = setup.names.slice(0, setup.count).map((n, i) => n.trim() || `Player ${i + 1}`);
   const colors = names.map((n, i) => PLAYER_COLORS[i]);
-  await beginGame(names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, [], selectedHostBoard?.card_decks);
+  await beginGame(names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, [accountUser?.id || null], selectedHostBoard?.card_decks, [accountUser?.avatar_url || null]);
 }
 // Shared by local play and online play: players keep their seat (id 0..n-1)
 // in the order given; turnOrder is a random shuffle of who goes first.
@@ -4853,13 +4866,13 @@ async function startGame() {
 // function, shuffle and reveal animation included, can be replayed
 // identically on every guest's screen; see the online randomness shim
 // near the top of the script and hostRun/guestReplay in SECTION 15.
-async function beginGame(names, colors, boardNames = {}, accountIds = [], cardDecks) {
+async function beginGame(names, colors, boardNames = {}, accountIds = [], cardDecks, avatarUrls = []) {
   const order = names.map((n, i) => i);
   for (let i = order.length - 1; i > 0; i--) {            // shuffle: this is the new turn order
     const j = Math.floor(await rnd() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
-  newGame(names, colors, boardNames, accountIds, cardDecks); // players stay in their given seats
+  newGame(names, colors, boardNames, accountIds, cardDecks, avatarUrls); // players stay in their given seats
   if (!applyGameAction({ type: 'SET_TURN_ORDER', order })) throw new Error('The starting turn order is invalid.');
   log(`Game started. ${cur().name} goes first.`);
   attachGame();
@@ -5942,7 +5955,7 @@ function accountPanelHTML() {
         <button class="btn alt" type="submit" ${accountBusy ? 'disabled' : ''}>Update</button></div>
     </form>
     <div class="account-actions">
-      <label class="btn alt" for="accountAvatarFile">Choose picture</label>
+      <button class="btn alt" type="button" onclick="document.getElementById('accountAvatarFile').click()" ${accountBusy ? 'disabled' : ''}>Choose picture</button>
       <input id="accountAvatarFile" type="file" accept="image/jpeg,image/png,image/webp" hidden onchange="uploadAccountAvatar(this.files[0])">
       ${accountUser.avatar_url ? '<button class="btn alt" type="button" onclick="removeAccountAvatar()">Remove picture</button>' : ''}
     </div>
@@ -6054,31 +6067,71 @@ async function changeAccountPassword(event) {
   } catch (error) { setAccountStatus(error.message); }
 }
 
-async function uploadAccountAvatar(file) {
-  if (!file) return;
-  if (file.size > 2 * 1024 * 1024) { setAccountStatus('Profile pictures must be 2 MB or smaller.'); return; }
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      const result = await accountRequest('/api/profile/avatar', {
-        method: 'POST', body: JSON.stringify({ image: reader.result }),
-      });
-      accountUser = { ...accountUser, avatar_url: result.avatar_url };
-      accountMessage = 'Profile picture uploaded and synced.';
-      refreshAccountUi();
-    } catch (error) { setAccountStatus(error.message); }
-  };
-  reader.onerror = () => setAccountStatus('Could not read that image file.');
-  reader.readAsDataURL(file);
+async function resizeAccountAvatar(file) {
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('Choose a JPEG, PNG, or WebP image.');
+  if (file.size > 20 * 1024 * 1024) throw new Error('Choose an image smaller than 20 MB.');
+  const source = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = source;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    if (!side) throw new Error('This image is empty.');
+    canvas.getContext('2d').drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
+    return canvas.toDataURL('image/webp', .85);
+  } finally { URL.revokeObjectURL(source); }
 }
-
+async function uploadAccountAvatar(file) {
+  if (!file || accountBusy) return;
+  accountBusy = true;
+  setAccountStatus('Preparing and uploading picture...');
+  refreshAccountUi();
+  try {
+    const image = await resizeAccountAvatar(file);
+    const result = await accountRequest('/api/profile/avatar', { method: 'POST', body: JSON.stringify({ image }) });
+    accountUser = { ...accountUser, avatar_url: result.avatar_url };
+    accountMessage = 'Profile picture uploaded. Your game piece now uses this picture.';
+    syncOwnGameAvatar();
+  } catch (error) { accountMessage = error.message || 'Could not read this image.'; }
+  finally { accountBusy = false; refreshAccountUi(); }
+}
 async function removeAccountAvatar() {
+  if (accountBusy) return;
+  accountBusy = true;
   try {
     await accountRequest('/api/profile/avatar', { method: 'DELETE' });
     accountUser = { ...accountUser, avatar_url: null };
     accountMessage = 'Profile picture removed.';
-    refreshAccountUi();
-  } catch (error) { setAccountStatus(error.message); }
+    syncOwnGameAvatar();
+  } catch (error) { accountMessage = error.message; }
+  finally { accountBusy = false; refreshAccountUi(); }
+}
+function playerAvatarUrl(player) {
+  return player?.accountId && player.accountId === accountUser?.id ? accountUser.avatar_url : player?.avatarUrl;
+}
+function playerAvatarContent(player, fallback) {
+  const url = playerAvatarUrl(player);
+  return url ? `<img class="player-avatar-image" src="${esc(url)}" alt="${esc(player.name || 'Player')} profile picture" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span hidden>${esc(fallback)}</span>` : esc(fallback);
+}
+function applyPeerAvatar(pid, avatarUrl) {
+  const roster = net.role === 'host' ? hostState().roster : joinState().roster;
+  const seat = roster?.find(player => player.pid === pid);
+  if (seat) seat.avatarUrl = avatarUrl;
+  if (game?.players[pid]) game.players[pid].avatarUrl = avatarUrl;
+  if (document.getElementById('plane')) { updateHud(); updateTokens(); }
+}
+function syncOwnGameAvatar() {
+  if (!accountUser) return;
+  if (game) for (const player of game.players) if (player.accountId === accountUser.id) player.avatarUrl = accountUser.avatar_url;
+  if (net.role === 'host') {
+    applyPeerAvatar(0, accountUser.avatar_url);
+    hostSend({ t: 'profile', pid: 0, avatarUrl: accountUser.avatar_url });
+  } else if (net.role === 'guest') {
+    try { joinState().conn?.send({ t: 'profile', avatarUrl: accountUser.avatar_url }); } catch (error) {}
+  }
+  if (document.getElementById('plane')) { updateHud(); updateTokens(); }
 }
 
 function setSoundEffectsVolume(pct) {

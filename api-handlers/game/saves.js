@@ -1,3 +1,4 @@
+const { syncGameAvatars } = require('../../lib/game-profiles');
 const { randomUUID } = require('node:crypto');
 const engine = require('../../game-engine.js');
 const boardData = require('../../game-board.js');
@@ -283,6 +284,7 @@ async function resumeGame({ account, gameId, db = database() }) {
     const spaces = Array.isArray(board?.spaces) ? board.spaces : boardData.spaces;
     const checked = validateSnapshot(save.state, board);
     if (checked.error) return checked.error;
+    await syncGameAvatars(tx, checked.state);
     await tx`INSERT INTO game_states (id, owner_id, state, board, version)
       VALUES (${normalizedGameId}, ${account.id}, ${JSON.stringify(checked.state)}::jsonb, ${JSON.stringify(board)}::jsonb, ${Number(save.version)})
       ON CONFLICT (id) DO UPDATE SET owner_id = EXCLUDED.owner_id, state = EXCLUDED.state, board = EXCLUDED.board, version = EXCLUDED.version, updated_at = now()`;
