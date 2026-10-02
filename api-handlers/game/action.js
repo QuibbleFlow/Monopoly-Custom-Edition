@@ -161,11 +161,20 @@ async function executeGameAction({
 
   try {
     return await db.begin(async tx => {
-      const gameRows = await tx`SELECT status, host_account_id FROM games WHERE id = ${gameId} FOR UPDATE`;
-      const game = gameRows[0];
-      if (!game) {
+      // Lock the game row and authoritative state together. This used to be
+      // two sequential Neon round trips for every button press.
+      const rows = await tx`
+        SELECT g.status, g.host_account_id, gs.id, gs.version, gs.state, gs.board
+        FROM games g
+        JOIN game_states gs ON gs.id = g.id
+        WHERE g.id = ${gameId}
+        FOR UPDATE OF g, gs
+      `;
+      const row = rows[0];
+      if (!row) {
         return { ok: false, error: { code: 'GAME_NOT_FOUND', message: 'Game not found.' } };
       }
+      const game = { status: row.status, host_account_id: row.host_account_id };
       if (requestId) {
         const existingRows = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
         if (existingRows && existingRows[0] && existingRows[0].result_json) {
@@ -174,12 +183,6 @@ async function executeGameAction({
       }
       if (game.status !== 'ACTIVE') {
         return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'This match is not active.' } };
-      }
-
-      const rows = await tx`SELECT id, version, state, board FROM game_states WHERE id = ${gameId} FOR UPDATE`;
-      const row = rows[0];
-      if (!row) {
-        return { ok: false, error: { code: 'GAME_NOT_FOUND', message: 'Game not found.' } };
       }
 
       const currentVersion = Number(row.version) || 1;
