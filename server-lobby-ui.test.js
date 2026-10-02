@@ -77,11 +77,11 @@ test('server UI uses invitation cards, host Delete confirmation, and host Save &
   assert.match(html, /backendRespondToInvitation\('\$\{esc\(invitation\.invitationId\)\}','accept'\)/);
   assert.match(html, /game\.isHost \? `<button class="btn alt" onclick="backendRenameGame/);
   assert.match(html, /onclick="backendDeleteGame\('\$\{esc\(gameId\)\}'\)">Delete<\/button>/);
-  assert.match(html, /window\.confirm\('Delete this server game/);
+  assert.match(html, /appConfirm\(\s*'Delete this server game/);
   assert.match(html, /'Save &amp; Quit'/);
   assert.match(html, /backendGameRequest\('\/api\/game\/pause'/);
-  assert.match(html, /window\.confirm\('Save this match and return everyone to the menu/);
-  assert.match(html, /window\.alert\(`Save & Quit failed/);
+  assert.match(html, /appConfirm\(\s*'Save this match and return everyone to the menu/);
+  assert.match(html, /appAlert\(\`Save & Quit failed/);
 });
 
 test('joining a server game stores its ID, enters its lobby, and starts polling', async () => {
