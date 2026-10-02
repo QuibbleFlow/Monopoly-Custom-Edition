@@ -88,7 +88,7 @@
   }
 
   function modeForContext(context) {
-    return ['menu', 'profile', 'friends', 'lobby', 'boards', 'settings', 'save', 'reconnect'].includes(context) ? 'mouse' : 'focus';
+    return ['gameplay', 'menu', 'profile', 'friends', 'lobby', 'boards', 'settings', 'game-menu', 'save', 'reconnect'].includes(context) ? 'mouse' : 'focus';
   }
 
   let preferences = { sensitivity: 1.2, deadzone: .18 };
@@ -145,6 +145,7 @@
     let interaction = { kind: 'menu', mode: 'mouse', scope: doc };
     let hudSignature = '';
     let lastFocusKey = null;
+    let bindingsDirty = true;
 
     function addStyles() {
       if (doc.getElementById('controllerSupportStyles')) return;
@@ -160,6 +161,22 @@
           z-index: 16 !important;
           filter: brightness(1.12);
         }
+        .controller-bind { display:none; }
+        body.controller-connected .controller-bind:not([hidden]) {
+          display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;
+          width:max-content;min-width:27px;min-height:26px;padding:2px 6px;margin-inline-start:7px;
+          border:2px solid #fff;border-radius:7px;background:#14251d;color:#fff;
+          box-shadow:0 0 0 1px #14251d;font:800 12px/1.1 system-ui,sans-serif;
+          white-space:nowrap;pointer-events:none;flex-shrink:0;
+        }
+        body.controller-connected .controller-bind[data-key="A"] { background:#147d37;border-radius:50%; }
+        body.controller-connected .controller-bind[data-key="B"] { background:#a32b29;border-radius:50%; }
+        body.controller-connected .controller-bind[data-key="X"] { background:#175c9d;border-radius:50%; }
+        body.controller-connected .controller-bind[data-key="Y"] { background:#ffe079;color:#192319;border-color:#192319;border-radius:50%; }
+        body.controller-connected .round { position:relative; }
+        body.controller-connected .round > .controller-bind { position:absolute;right:-8px;bottom:-6px;margin:0; }
+        body.controller-connected .controller-field-bind { margin-inline:7px; }
+        @media (max-width:1099px) { body.controller-connected .layout { padding-top:130px; } }
         .controller-hud {
           position: fixed;
           left: 50%;
@@ -345,7 +362,9 @@
         updateTurnPrompt(false);
         return;
       }
-      const hints = interaction.kind === 'keyboard'
+      const hints = interaction.kind === 'gameplay'
+        ? `<span>Left stick: cursor</span><span><kbd>${labels.A}</kbd> Roll / end turn</span><span><kbd>${labels.RT}</kbd> Click cursor</span><span>Right stick: scroll</span>`
+        : interaction.kind === 'keyboard'
         ? `<span>Stick / D-pad: choose key</span><span><kbd>${labels.A}</kbd> Type</span><span><kbd>${labels.X}</kbd> Delete</span><span><kbd>${labels.B}</kbd> Cancel</span><span><kbd>${labels.MENU}</kbd> Done</span>`
         : interaction.kind === 'manage'
           ? `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.LB}</kbd><kbd>${labels.RB}</kbd> Property</span><span><kbd>${labels.B}</kbd> Exit</span>`
@@ -357,7 +376,7 @@
                 ? `<span>Left stick: cursor</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.B}</kbd> Back</span><span>Right stick: scroll</span>`
                 : `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.B}</kbd> Back</span>`;
       const gameHints = interaction.kind === 'gameplay'
-        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.MENU}</kbd> Game menu</span>` : '';
+        ? `<span><kbd>${labels.B}</kbd> Back</span><span><kbd>${labels.RB}</kbd> Friends</span><span><kbd>${labels.VIEW}</kbd> Profile</span><span><kbd>${labels.MENU}</kbd> Game menu</span>` : '';
       hud.innerHTML = `<span class="pad-name">🎮 ${escapeHtml(shortControllerName(connectedId))}</span>
         ${hints}
         ${gameHints}`;
@@ -389,13 +408,13 @@
         return { kind, mode: 'focus', scope: scrim };
       }
       const accountMenu = doc.getElementById('cornerAccountDialog');
-      if (accountMenu && visible(accountMenu)) return { kind: 'profile', mode: 'mouse', scope: accountMenu };
-      if (scrim) return { kind: 'settings', mode: 'mouse', scope: scrim };
+      if (accountMenu && visible(accountMenu)) return { kind: /friends/i.test(doc.getElementById('cornerAccountTitle')?.textContent || '') ? 'friends' : 'profile', mode: 'mouse', scope: accountMenu };
+      if (scrim) return { kind: scrim.dataset.controllerContext || 'settings', mode: 'mouse', scope: scrim };
       const manage = doc.getElementById('manage');
       if (manage?.querySelector('.mg-exit')) return { kind: 'manage', mode: 'focus', scope: manage };
       const pause = doc.getElementById('pauseOverlay');
       if (pause && visible(pause)) return { kind: 'paused', mode: 'focus', scope: pause };
-      if (isGameScreen()) return { kind: 'gameplay', mode: 'focus', scope: doc };
+      if (isGameScreen()) return { kind: 'gameplay', mode: 'mouse', scope: doc };
       const kind = doc.querySelector('.reconnect-screen') ? 'reconnect' : doc.querySelector('.setup') ? 'menu' : 'other';
       return { kind, mode: modeForContext(kind), scope: doc };
     }
@@ -414,7 +433,7 @@
       if (changed) {
         cursor.vx = 0; cursor.vy = 0;
         hoveredElement?.classList.remove('controller-hover'); hoveredElement = null;
-        repeatState = Object.create(null); lastFocusKey = null;
+        repeatState = Object.create(null); lastFocusKey = null; bindingsDirty = true;
         drawCursor();
       }
       if (next.mode === 'focus' && doc.body.classList.contains('controller-input')) {
@@ -427,10 +446,11 @@
         lastFocusKey = focusKey(doc.activeElement);
       }
       const roll = doc.querySelector('#dock [data-controller-action="roll"]');
-      const canRoll = next.kind === 'gameplay' && !!roll && !roll.disabled && visible(roll) && doc.activeElement === roll;
+      const canRoll = next.kind === 'gameplay' && !!roll && !roll.disabled && visible(roll);
       updateTurnPrompt(canRoll);
       const signature = [next.kind, next.mode, connectedId, canRoll].join('|');
       if (signature !== hudSignature) { hudSignature = signature; updateHud(); }
+      if (bindingsDirty && connectedIndex != null) { bindingsDirty = false; refreshBindingLabels(); }
     }
 
     function shortControllerName(id) {
@@ -491,6 +511,8 @@
       connectedId = pad.id || 'Controller';
       family = controllerFamily(connectedId);
       labels = buttonLabels(family);
+      bindingsDirty = true;
+      doc.body.classList.add('controller-connected');
       buttonWasDown = [];
       repeatState = Object.create(null);
       addStyles();
@@ -514,7 +536,7 @@
       updateHud();
       closeQuickMenu();
       closeKeyboard(false);
-      doc.body.classList.remove('controller-input');
+      doc.body.classList.remove('controller-input', 'controller-connected');
       toast('Controller disconnected');
     }
 
@@ -526,6 +548,11 @@
 
     function visible(el) {
       if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+      return displayed(el);
+    }
+
+    function displayed(el) {
+      if (!el) return false;
       const style = root.getComputedStyle(el);
       if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
       const rect = el.getBoundingClientRect();
@@ -655,14 +682,148 @@
       root.setTimeout(() => ensureFocused(), 45);
     }
 
-    function buttonByText(patterns, scope = doc) {
+    function controlText(control) {
+      if (control.getAttribute('aria-label')) return control.getAttribute('aria-label');
+      const copy = control.cloneNode(true);
+      copy.querySelectorAll('.controller-bind').forEach(badge => badge.remove());
+      return copy.textContent || '';
+    }
+
+    function buttonByText(patterns, scope = doc, includeDisabled = false) {
       const lowered = patterns.map(value => String(value).toLowerCase());
-      return Array.from(scope.querySelectorAll('button:not([disabled]), [role="button"]:not([aria-disabled="true"])'))
-        .filter(visible)
+      return Array.from(scope.querySelectorAll('button, [role="button"], summary'))
+        .filter(includeDisabled ? displayed : visible)
         .find(button => {
-          const text = (button.getAttribute('aria-label') || button.textContent || '').trim().toLowerCase();
+          const text = controlText(button).trim().toLowerCase();
           return lowered.some(pattern => text === pattern || text.startsWith(pattern));
         }) || null;
+    }
+
+    // Labels and button dispatch use the same targets so a displayed shortcut
+    // always runs the action next to it. Unbound controls retain cursor/focus selection.
+    function shortcutTargets(context = readInteraction()) {
+      const targets = new Map();
+      const add = (key, element) => { if (element) targets.set(key, element); };
+      const text = patterns => buttonByText(patterns, context.scope, true);
+      if (context.mode === 'mouse') {
+        add('RB', doc.getElementById('cornerFriendsButton'));
+        add('VIEW', doc.getElementById('cornerProfileButton'));
+        add('MENU', doc.querySelector('.corner-tr button[onclick="openGameMenu()"]'));
+      }
+      if (context.kind === 'gameplay') {
+        add('A', doc.querySelector('#dock .primary'));
+        add('X', doc.querySelector('#dock button[onclick="openManage()"]'));
+        add('Y', text(['trade']));
+        add('LB', doc.querySelector('#dock button[onclick="openDeeds()"]'));
+        add('LT', doc.querySelector('#dock .action .dbtn'));
+      } else if (context.kind === 'manage') {
+        add('LB', context.scope.querySelector('.mg-arrow.right'));
+        add('RB', context.scope.querySelector('.mg-arrow.left'));
+        add('X', context.scope.querySelector('[data-controller-focus="sell-house"]'));
+        add('Y', context.scope.querySelector('[data-controller-focus="build-house"]'));
+        add('RT', context.scope.querySelector('[data-controller-focus="mortgage"]'));
+        add('B', context.scope.querySelector('.mg-exit'));
+      } else if (context.kind === 'purchase') {
+        add('B', text(['auction']));
+      } else if (context.kind === 'auction') {
+        const bids = Array.from(context.scope.querySelectorAll('button')).filter(button => /^bid /i.test(controlText(button)));
+        ['X', 'LB', 'RB'].forEach((key, index) => add(key, bids[index]));
+        add('Y', doc.getElementById('bidInput'));
+        add('RT', text(['place bid']));
+        add('B', text(['fold']));
+      } else if (context.kind === 'keyboard') {
+        add('X', text(['⌫ backspace']));
+        add('Y', text(['space']));
+        add('B', text(['cancel']));
+        add('MENU', text(['done']));
+      } else if (context.kind === 'game-menu') {
+        add('X', text(['♟ players', 'players']));
+        add('Y', text(['⚙ settings', 'settings']));
+        add('RB', text(['♧ friends', 'friends']));
+        add('LT', text(['pause game clock', 'resume game clock']));
+        add('RT', text(['save & quit']));
+        add('LB', text(['abandon match']));
+        add('B', text(['▶ resume', 'resume', 'back']));
+      } else if (context.kind === 'profile') {
+        add('X', context.scope.querySelector('.profile-security > summary'));
+        add('Y', context.scope.querySelector('.profile-preferences > summary'));
+      } else if (context.kind === 'friends') {
+        add('X', doc.getElementById('friendSearchInput'));
+      } else if (context.kind === 'menu') {
+        add('X', text(['create game', 'save board', 'create board']));
+        add('Y', text(['join game', 'new board']));
+        add('LB', text(['custom boards']));
+        add('LT', text(['🎲 play on one screen', 'play on one screen']));
+      }
+      if (!targets.has('B') && context.kind !== 'gameplay') {
+        add('B', text(['close menu', 'close', 'back', 'cancel', 'exit', 'done', 'ok']));
+      }
+      return targets;
+    }
+
+    function activateShortcut(key) {
+      const element = shortcutTargets().get(key);
+      if (!element) return false;
+      if (!visible(element)) return true;
+      if (['cornerFriendsButton', 'cornerProfileButton'].includes(element.id) && doc.getElementById('gameMenuOverlay')) root.closeGameMenu?.();
+      if (element.matches('input, textarea')) { focusElement(element); openKeyboard(element); }
+      else { element.click(); haptic(.13, 42); }
+      return true;
+    }
+
+    function refreshBindingLabels() {
+      const context = readInteraction();
+      const targets = shortcutTargets(context);
+      const activeTargets = new Set(targets.values());
+      const assigned = new Map(Array.from(targets, ([key, element]) => [element, key]));
+      assigned.set(doc.getElementById('cornerFriendsButton'), 'RB');
+      assigned.set(doc.getElementById('cornerProfileButton'), 'VIEW');
+      const gameMenu = doc.querySelector('.corner-tr button[onclick="openGameMenu()"]');
+      if (gameMenu) assigned.set(gameMenu, 'MENU');
+      const controls = doc.querySelectorAll('button, a[href], summary, input:not([type="hidden"]):not([type="file"]), select, textarea');
+      for (const control of controls) {
+        if (control.matches('.cell, .controller-key:not(.wide):not(.extra-wide)') || control.closest('#controllerHud, #controllerTurnPrompt, .vol-ctrl')) continue;
+        if (!displayed(control)) continue;
+        const key = assigned.get(control) || (context.kind === 'gameplay' ? 'RT' : 'A');
+        let host = control;
+        const field = control.matches('input, select, textarea');
+        if (field) {
+          host = control.labels?.[0];
+          if (!host && !assigned.has(control)) continue;
+          if (host) {
+            let title = Array.from(host.children).find(child => child.classList.contains('controller-field-title'));
+            if (!title) {
+              title = doc.createElement('span'); title.className = 'controller-field-title';
+              Array.from(host.childNodes).filter(node => node.nodeType === 3).forEach(node => title.appendChild(node));
+              host.insertBefore(title, host.firstChild);
+            }
+            host = title;
+          }
+        }
+        let badge = field && !host ? control.nextElementSibling : Array.from(host.children).find(child => child.classList.contains('controller-bind'));
+        if (!badge?.classList.contains('controller-bind')) {
+          badge = doc.createElement('kbd'); badge.className = 'controller-bind' + (field ? ' controller-field-bind' : '');
+          badge.setAttribute('aria-hidden', 'true');
+          if (host) host.appendChild(badge); else control.after(badge);
+        }
+        if (badge.dataset.key !== key) badge.dataset.key = key;
+        if (badge.textContent !== labels[key]) badge.textContent = labels[key];
+        const inactive = context.scope !== doc && !context.scope.contains(control) && !activeTargets.has(control);
+        if (badge.hidden !== inactive) badge.hidden = inactive;
+      }
+    }
+
+    function onBindingMutations(records) {
+      if (connectedIndex == null || bindingsDirty) return;
+      bindingsDirty = records.some(record => {
+        const element = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+        if (element?.closest('.controller-bind, #controllerHud, #controllerTurnPrompt, #controllerCursor, #board')) return false;
+        if (record.type === 'childList') {
+          const nodes = [...record.addedNodes, ...record.removedNodes];
+          if (nodes.length && nodes.every(node => node.nodeType === 1 && node.classList?.contains('controller-bind'))) return false;
+        }
+        return true;
+      });
     }
 
     function triggerByText(patterns) {
@@ -1052,8 +1213,7 @@
         if (moving || Math.hypot(cursor.vx, cursor.vy) > .1) { moveCursor(pointerX, pointerY, elapsed); used = moving; }
         const scrollX = Math.abs(rx) > preferences.deadzone ? rx : 0;
         const scrollY = Math.abs(ry) > preferences.deadzone ? ry : 0;
-        const triggerScroll = (pressed(pad, STANDARD.RT) ? 1 : 0) - (pressed(pad, STANDARD.LT) ? 1 : 0);
-        if (scrollX || scrollY || triggerScroll) { scrollCursor(scrollX, scrollY || triggerScroll, elapsed); used = true; }
+        if (scrollX || scrollY) { scrollCursor(scrollX, scrollY, elapsed); used = true; }
       } else {
       if (repeatGate('up', up, timestamp)) { moveFocus(0, -1); used = true; }
       else if (repeatGate('down', down, timestamp)) { moveFocus(0, 1); used = true; }
@@ -1076,24 +1236,26 @@
 
       }
 
-      if (edge(pad, STANDARD.A)) { if (interaction.mode === 'mouse') clickCursor(); else activateFocused(); used = true; }
-      if (edge(pad, STANDARD.B)) { contextualBack(); used = true; }
+      if (edge(pad, STANDARD.A)) { if (!activateShortcut('A')) { if (interaction.mode === 'mouse') clickCursor(); else activateFocused(); } used = true; }
+      if (edge(pad, STANDARD.B)) { if (!activateShortcut('B')) contextualBack(); used = true; }
       if (edge(pad, STANDARD.X)) {
-        if (keyboardState) keyboardBackspace(); else quickAction('manage');
+        if (!activateShortcut('X')) { if (keyboardState) keyboardBackspace(); else quickAction('manage'); }
         used = true;
       }
       if (edge(pad, STANDARD.Y)) {
-        if (keyboardState) keyboardAppend(' '); else quickAction('trade');
+        if (!activateShortcut('Y')) { if (keyboardState) keyboardAppend(' '); else quickAction('trade'); }
         used = true;
       }
-      if (edge(pad, STANDARD.LB)) { if (interaction.kind === 'manage') shoulder(-1); else if (!keyboardState) quickAction('deeds'); used = true; }
-      if (edge(pad, STANDARD.RB)) { if (!keyboardState) shoulder(1); used = true; }
-      if (edge(pad, STANDARD.LT)) { if (interaction.mode === 'focus' && !keyboardState) shoulder(-1); used = true; }
-      if (edge(pad, STANDARD.RT)) { if (interaction.mode === 'focus' && !keyboardState) quickAction('primary'); used = true; }
-      if (edge(pad, STANDARD.MENU)) { if (keyboardState) closeKeyboard(true); else openQuickMenu(); used = true; }
+      if (edge(pad, STANDARD.LB)) { if (!activateShortcut('LB')) { if (interaction.kind === 'manage') shoulder(-1); else if (!keyboardState) quickAction('deeds'); } used = true; }
+      if (edge(pad, STANDARD.RB)) { if (!activateShortcut('RB') && !keyboardState && interaction.mode === 'focus') shoulder(1); used = true; }
+      if (edge(pad, STANDARD.LT)) { if (!activateShortcut('LT') && interaction.mode === 'focus' && !keyboardState) shoulder(-1); used = true; }
+      if (edge(pad, STANDARD.RT)) { if (!activateShortcut('RT')) { if (interaction.mode === 'mouse') clickCursor(); else if (!keyboardState) quickAction('primary'); } used = true; }
+      if (edge(pad, STANDARD.MENU)) { if (!activateShortcut('MENU')) { if (keyboardState) closeKeyboard(true); else openQuickMenu(); } used = true; }
       if (edge(pad, STANDARD.VIEW)) {
-        updateHud();
-        toast(interaction.mode === 'mouse' ? `Left stick: cursor · ${labels.A} select · ${labels.B} back · Right stick: scroll` : `Stick / D-pad: choose · ${labels.A} confirm · ${labels.B} back`);
+        if (!activateShortcut('VIEW')) {
+          updateHud();
+          toast(interaction.mode === 'mouse' ? `Left stick: cursor · ${labels.A} select · ${labels.B} back · Right stick: scroll` : `Stick / D-pad: choose · ${labels.A} confirm · ${labels.B} back`);
+        }
         used = true;
       }
       if (edge(pad, STANDARD.LS)) {
@@ -1136,9 +1298,13 @@
 
     addStyles();
     ensureHud();
+    new root.MutationObserver(onBindingMutations).observe(doc.body, {
+      childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'aria-label', 'hidden', 'open'],
+    });
     root.addEventListener('gamepadconnected', onGamepadConnected);
     root.addEventListener('gamepaddisconnected', onGamepadDisconnected);
-    root.addEventListener('resize', positionTurnPrompt);
+    root.addEventListener('resize', () => { bindingsDirty = true; positionTurnPrompt(); });
     doc.addEventListener('pointerdown', onPointerInput, { passive: true });
     doc.addEventListener('keydown', onKeyboardInput, { passive: true });
 

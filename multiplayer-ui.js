@@ -193,6 +193,7 @@ function openGameMenu() {
   closeCornerMenu(false);
   const overlay = document.createElement('div');
   overlay.id = 'gameMenuOverlay'; overlay.className = 'scrim game-menu-overlay';
+  overlay.dataset.controllerContext = 'game-menu';
   overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'gameMenuTitle');
   overlay.innerHTML = `<section class="dialog game-menu-card"><h2 id="gameMenuTitle">Game Menu</h2><div class="game-menu-actions">
@@ -222,7 +223,7 @@ function controllerSettingsHTML() {
   return `<fieldset class="controller-settings"><legend>Controller</legend>
     <label for="controllerSensitivity">Cursor sensitivity<input id="controllerSensitivity" type="range" min="0.4" max="2.5" step="0.1" value="${prefs.sensitivity}" oninput="setControllerPreference('sensitivity',Number(this.value))"></label>
     <label for="controllerDeadzone">Stick deadzone<input id="controllerDeadzone" type="range" min="0.1" max="0.4" step="0.01" value="${prefs.deadzone}" oninput="setControllerPreference('deadzone',Number(this.value))"></label>
-    <p class="muted">Controls switch automatically. Menus use a cursor; gameplay, property controls and typing use highlighted buttons. A: select · B: back · Menu: game menu.</p></fieldset>`;
+    <p class="muted">Controls switch automatically. The main board and browsing menus use a cursor. Follow the shown shortcuts to roll, end your turn, click the cursor or open menus. Property controls, dialogs and typing use highlighted buttons. Connected controllers show shortcuts beside each action.</p></fieldset>`;
 }
 
 function setControllerPreference(key, value) {

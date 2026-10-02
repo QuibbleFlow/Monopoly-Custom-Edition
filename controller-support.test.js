@@ -69,10 +69,10 @@ test('controller settings clamp sensitivity and deadzone without retaining a man
 
 test('controller interaction follows the screen rather than an account preference', () => {
   const { modeForContext } = require('./controller-support');
-  for (const screen of ['menu','profile','friends','lobby','boards','settings','save','reconnect']) {
+  for (const screen of ['gameplay','menu','profile','friends','lobby','boards','settings','game-menu','save','reconnect']) {
     assert.equal(modeForContext(screen),'mouse',screen);
   }
-  for (const screen of ['gameplay','manage','purchase','auction','keyboard','trade','dialog','other',undefined]) {
+  for (const screen of ['manage','purchase','auction','keyboard','trade','dialog','other',undefined]) {
     assert.equal(modeForContext(screen),'focus',screen);
   }
 });
