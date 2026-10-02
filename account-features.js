@@ -1,4 +1,4 @@
-const CUSTOM_PROPERTY_IDS = new Set([1, 3, 6, 8, 9, 11, 13, 14, 16, 18, 19, 21, 23, 24, 26, 27, 29, 31, 32, 34, 37, 39]);
+const CUSTOM_SPACE_IDS = new Set(Array.from({ length: 40 }, (_, index) => index));
 const friendsScreenState = { friends: [], requests: [], results: [], status: '', query: '' };
 const boardsScreenState = { boards: [], friends: [], status: '', editor: null, sharingBoardId: null, selectingForHost: false };
 let accountPresenceTimer = null;
@@ -357,7 +357,7 @@ function renderBoardsScreen() {
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
     <p class="sub">Custom Boards</p>
     <div class="panel acc-blue"><h2>${boardsScreenState.selectingForHost ? 'Choose a game board' : 'Board library'}</h2>
-      <p class="muted">Property names change for display only. Board positions, ownership, and all game rules keep their fixed square IDs.</p>
+      <p class="muted">Rename any of the 40 board spaces. Board positions, ownership, and all game rules keep their fixed square IDs.</p>
       <div class="account-actions"><button class="btn alt" type="button" onclick="selectClassicBoard()">Classic board</button>
         <button class="btn" type="button" onclick="createCustomBoard()">Create board</button></div>
     </div>
@@ -411,24 +411,22 @@ function renderBoardEditorScreen() {
   if (!editor) { setup.screen = 'boards'; renderBoardsScreen(); return; }
   const spaces = SPACES.map((space, index) => {
     const [row, col] = gridPos(index);
-    const editable = CUSTOM_PROPERTY_IDS.has(index);
     const color = space.type === 'property' ? COLOR_GROUPS[space.group].css : '#a9b3ac';
     const label = esc(editorSpaceLabel(index));
     const contents = `<span class="board-preview-label">${label}</span>`;
     const style = `grid-row:${row};grid-column:${col};--space-color:${color}`;
-    return editable
-      ? `<button class="board-preview-space property ${editor.selected === index ? 'selected' : ''}" style="${style}" type="button" title="${label}" aria-label="Rename ${label}" aria-pressed="${editor.selected === index}" data-space="${index}" onclick="selectEditorProperty(${index})">${contents}</button>`
-      : `<div class="board-preview-space ${space.type}" style="${style}" title="${label}">${contents}</div>`;
+    return `<button class="board-preview-space ${space.type} ${editor.selected === index ? 'selected' : ''}" style="${style}" type="button" title="${label}" aria-label="Rename ${label}" aria-pressed="${editor.selected === index}" data-space="${index}" onclick="selectEditorProperty(${index})">${contents}</button>`;
   }).join('');
   const selectedName = editor.property_names[editor.selected] || SPACES[editor.selected].name;
-  const selectedColor = COLOR_GROUPS[SPACES[editor.selected].group].css;
+  const selectedSpace = SPACES[editor.selected];
+  const selectedColor = selectedSpace.type === 'property' ? COLOR_GROUPS[selectedSpace.group].css : '#a9b3ac';
   $('app').innerHTML = `<div class="setup board-editor">
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
     <p class="sub">Board Editor</p>
     <div class="board-editor-layout">
     <div class="panel acc-green board-editor-stage">
-      <div class="board-editor-stage-heading"><h2>Your board</h2><span class="board-editor-count">${Object.keys(editor.property_names).length} of ${CUSTOM_PROPERTY_IDS.size} properties renamed</span></div>
-      <div class="board-editor-preview"><div class="board-preview-center"><span class="board-preview-title">${esc(editor.name)}</span><span class="board-preview-hint">Select a colored property to rename it</span></div>${spaces}</div>
+      <div class="board-editor-stage-heading"><h2>Your board</h2><span class="board-editor-count">${Object.keys(editor.property_names).length} of ${CUSTOM_SPACE_IDS.size} spaces renamed</span></div>
+      <div class="board-editor-preview"><div class="board-preview-center"><span class="board-preview-title">${esc(editor.name)}</span><span class="board-preview-hint">Select any space to rename it</span></div>${spaces}</div>
     </div>
     <div class="panel acc-blue board-editor-controls">
       <h2>Customize your board</h2>
@@ -438,10 +436,10 @@ function renderBoardEditorScreen() {
       </div>
       <div class="board-editor-field board-editor-property" style="--space-color:${selectedColor}">
       <label for="selectedPropertyName">${esc(SPACES[editor.selected].name)}</label>
-      <p class="muted">Enter a new property name</p>
+      <p class="muted">Enter a new space name</p>
       <input id="selectedPropertyName" type="text" maxlength="32" value="${esc(selectedName)}" oninput="updateBoardPropertyName(this.value)">
       </div>
-      <p class="muted">Choose a colored tile on the board to edit its name. Clear the field to restore its original name.</p>
+      <p class="muted">Choose any tile on the board to edit its name. Clear the field to restore its original name.</p>
       <div class="account-actions"><button class="btn" type="button" onclick="saveCustomBoardEditor()">Save board</button>
         <button class="btn alt" type="button" onclick="setup.screen='boards'; renderBoardsScreen()">Cancel</button></div>
       <p class="account-status" role="status">${esc(boardsScreenState.status)}</p>
@@ -457,7 +455,7 @@ function renderBoardEditorScreen() {
 }
 
 function selectEditorProperty(index) {
-  if (!CUSTOM_PROPERTY_IDS.has(index) || !boardsScreenState.editor) return;
+  if (!CUSTOM_SPACE_IDS.has(index) || !boardsScreenState.editor) return;
   boardsScreenState.editor.selected = index;
   renderBoardEditorScreen();
 }
@@ -484,7 +482,7 @@ function updateBoardPropertyName(value) {
     fitBoardEditorLabels();
   }
   const count = document.querySelector('.board-editor-count');
-  if (count) count.textContent = `${Object.keys(editor.property_names).length} of ${CUSTOM_PROPERTY_IDS.size} properties renamed`;
+  if (count) count.textContent = `${Object.keys(editor.property_names).length} of ${CUSTOM_SPACE_IDS.size} spaces renamed`;
 }
 
 async function saveCustomBoardEditor() {
@@ -494,7 +492,7 @@ async function saveCustomBoardEditor() {
   updateBoardPropertyName($('selectedPropertyName').value);
   boardsScreenState.status = 'Saving board...';
   try {
-    const body = { name: editor.name, propertyNames: editor.property_names };
+    const body = { name: editor.name, propertyNames: editor.property_names, replacePropertyNames: true };
     const result = await accountRequest(editor.id ? `/api/boards/${encodeURIComponent(editor.id)}` : '/api/boards', {
       method: editor.id ? 'PATCH' : 'POST', body: JSON.stringify(body),
     });

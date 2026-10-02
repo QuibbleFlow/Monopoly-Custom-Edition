@@ -1,7 +1,7 @@
 const { database, noStore, parseBody, requireAccount, requireSameOrigin, sendError } = require('../../lib/account');
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PROPERTY_INDEXES = new Set([1, 3, 6, 8, 9, 11, 13, 14, 16, 18, 19, 21, 23, 24, 26, 27, 29, 31, 32, 34, 37, 39]);
+const SPACE_INDEXES = new Set(Array.from({ length: 40 }, (_, index) => index));
 
 function validName(value) {
   return typeof value === 'string' && value.trim().length >= 1 && value.trim().length <= 40;
@@ -11,7 +11,7 @@ function validPropertyNames(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   return Object.entries(value).every(([key, name]) => {
     const index = Number(key);
-    return String(index) === key && PROPERTY_INDEXES.has(index) &&
+    return String(index) === key && SPACE_INDEXES.has(index) &&
       typeof name === 'string' && name.trim().length >= 1 && name.trim().length <= 32;
   });
 }
@@ -50,7 +50,7 @@ module.exports = async function board(req, res) {
     const body = parseBody(req);
     if (body.name !== undefined && !validName(body.name)) return sendError(res, 400, 'Board name must be 1-40 characters.');
     if (body.propertyNames !== undefined && !validPropertyNames(body.propertyNames)) {
-      return sendError(res, 400, 'Only the 22 regular property spaces can be renamed.');
+      return sendError(res, 400, 'Space names must be 1-32 characters and use square IDs 0-39.');
     }
     if (body.name === undefined && body.propertyNames === undefined) return sendError(res, 400, 'No board changes were provided.');
 
@@ -60,7 +60,9 @@ module.exports = async function board(req, res) {
     const name = body.name === undefined ? currentRows[0].name : body.name.trim();
     const propertyNames = body.propertyNames === undefined
       ? currentRows[0].property_names
-      : { ...currentRows[0].property_names, ...cleanPropertyNames(body.propertyNames) };
+      : body.replacePropertyNames === true
+        ? cleanPropertyNames(body.propertyNames)
+        : { ...currentRows[0].property_names, ...cleanPropertyNames(body.propertyNames) };
     const updated = await database()`UPDATE custom_boards SET name = ${name},
       property_names = ${JSON.stringify(propertyNames)}::jsonb, updated_at = now()
       WHERE id = ${id} AND owner_id = ${account.id}
