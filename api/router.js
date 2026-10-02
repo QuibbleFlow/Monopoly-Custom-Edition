@@ -15,6 +15,7 @@ const routes = {
     search: require('../api-handlers/friends/search.js'),
     requests: require('../api-handlers/friends/requests.js'),
     request: require('../api-handlers/friends/requests/[id].js'),
+    snapshot: require('../api-handlers/friends/snapshot.js'),
     item: require('../api-handlers/friends/[id].js'),
   },
   game: {
@@ -98,6 +99,7 @@ module.exports = async function apiRouter(req, res) {
       if (parts.length === 1) return routes.friends.index(req, res);
       if (parts.length === 2 && action === 'search') return routes.friends.search(req, res);
       if (parts.length === 2 && action === 'requests') return routes.friends.requests(req, res);
+      if (parts.length === 2 && action === 'snapshot') return routes.friends.snapshot(req, res);
       if (parts.length === 3 && action === 'requests') {
         return routes.friends.request(withQuery(req, { id: idOrAction }), res);
       }
