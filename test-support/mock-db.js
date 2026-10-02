@@ -67,6 +67,18 @@ function makeDb(initial = makeDbState()) {
       return state.players.filter(player => player.game_id === values[0] && player.account_id === values[1])
         .map(player => ({ account_id: player.account_id }));
     }
+    if (query.startsWith('SELECT gp.account_id, gp.seat_index, gp.returned_at, a.username, a.avatar_url FROM game_players gp JOIN accounts a ON a.id = gp.account_id WHERE gp.game_id = $1 ORDER BY gp.seat_index ASC')) {
+      return state.players
+        .filter(player => player.game_id === values[0])
+        .sort((a, b) => a.seat_index - b.seat_index)
+        .map(player => ({
+          account_id: player.account_id,
+          seat_index: player.seat_index,
+          returned_at: player.returned_at || null,
+          username: state.accounts[player.account_id]?.username || player.account_id,
+          avatar_url: state.accounts[player.account_id]?.avatar_url || null,
+        }));
+    }
     if (query.startsWith('SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url FROM game_players gp JOIN accounts a ON a.id = gp.account_id WHERE gp.game_id = $1 ORDER BY gp.seat_index ASC')) {
       return state.players.filter(player => player.game_id === values[0]).sort((a, b) => a.seat_index - b.seat_index).map(player => ({
         game_id: player.game_id,
@@ -383,6 +395,18 @@ function makeDb(initial = makeDbState()) {
           seat_index: state.players.find(player => player.game_id === game.id && player.account_id === values[0])?.seat_index ?? 0,
         }));
     }
+    if (query.startsWith('SELECT g.id, g.status FROM games g JOIN game_players gp ON gp.game_id = g.id WHERE g.id = $1 AND g.host_account_id = $2 AND gp.account_id = $3 AND g.status IN')) {
+      const game = state.games.find(entry => entry.id === values[0] && entry.host_account_id === values[1] && ['ACTIVE', 'PAUSED'].includes(entry.status));
+      const member = state.players.some(player => player.game_id === values[0] && player.account_id === values[2]);
+      return game && member ? [{ id: game.id, status: game.status }] : [];
+    }
+    if (query.startsWith("SELECT id, status FROM games WHERE resume_save_id = $1 AND host_account_id = $2 AND status = 'WAITING' ORDER BY updated_at DESC LIMIT 1 FOR UPDATE")) {
+      return state.games
+        .filter(game => game.resume_save_id === values[0] && game.host_account_id === values[1] && game.status === 'WAITING')
+        .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+        .slice(0, 1)
+        .map(game => ({ id: game.id, status: game.status }));
+    }
     if (query.startsWith('SELECT * FROM games WHERE id = $1 FOR UPDATE')) {
       return state.games.filter(game => game.id === values[0]);
     }
@@ -455,6 +479,13 @@ function makeDb(initial = makeDbState()) {
         save.updated_at = new Date().toISOString();
       }
       return [{ ok: true }];
+    }
+    if (query.startsWith('SELECT id FROM game_saves WHERE source_game_id = $1 AND owner_id = $2 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE')) {
+      return state.saves
+        .filter(save => save.source_game_id === values[0] && save.owner_id === values[1])
+        .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+        .slice(0, 1)
+        .map(save => ({ id: save.id }));
     }
     if (query.startsWith('SELECT id FROM game_saves WHERE id = $1 AND owner_id = $2 FOR UPDATE')) {
       return state.saves.filter(save => save.id === values[0] && save.owner_id === values[1]).map(save => ({ id: save.id }));
