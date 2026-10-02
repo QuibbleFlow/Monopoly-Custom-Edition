@@ -90,10 +90,21 @@ async function saveGame({ account, gameId, name, saveId = null, db = database() 
       username: player.username,
       avatarUrl: player.avatar_url || null,
     }));
-    const id = saveId || randomUUID();
+    let id = saveId;
     if (saveId) {
       const owned = await tx`SELECT id FROM game_saves WHERE id = ${saveId} AND owner_id = ${account.id} FOR UPDATE`;
       if (!owned[0]) return err('SAVE_NOT_FOUND', 'Save not found.', 404);
+    } else {
+      // One match owns one canonical save slot. Repeated saves update it
+      // instead of silently creating duplicate entries for the same match.
+      const existing = await tx`SELECT id FROM game_saves
+        WHERE source_game_id = ${normalizedGameId} AND owner_id = ${account.id}
+        ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`;
+      id = existing[0]?.id || randomUUID();
+    }
+
+    const existingId = await tx`SELECT id FROM game_saves WHERE id = ${id} AND owner_id = ${account.id} FOR UPDATE`;
+    if (existingId[0]) {
       await tx`UPDATE game_saves SET name = ${normalizedName}, source_game_id = ${normalizedGameId}, status = ${'SAVED'}, version = ${version}, state = ${JSON.stringify(checked.state)}::jsonb, board = ${JSON.stringify(board)}::jsonb, players = ${JSON.stringify(metadata)}::jsonb, selected_board_id = ${game.selected_board_id || null}, updated_at = now() WHERE id = ${id} AND owner_id = ${account.id}`;
     } else {
       await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
@@ -126,6 +137,76 @@ async function loadGame({ account, saveId, db = database() }) {
     if (!Array.isArray(players) || players.length !== checked.state.players.length || players.some((player, index) => player.accountId !== checked.state.players[index].accountId || Number(player.seatIndex) !== index)) {
       return err('INVALID_SAVE_STATE', 'The saved player identities do not match the authoritative state.');
     }
+
+    // If the source match is still alive, reopen the real authoritative
+    // match instead of cloning an older save snapshot into another lobby.
+    // game_states already persists every accepted action, so this also makes
+    // reconnecting after a browser/network failure recover the freshest
+    // possible state without adding a save write to every turn.
+    const liveGames = await tx`SELECT g.id, g.status
+      FROM games g
+      JOIN game_players gp ON gp.game_id = g.id
+      WHERE g.id = ${save.source_game_id}
+        AND g.host_account_id = ${account.id}
+        AND gp.account_id = ${account.id}
+        AND g.status IN ('ACTIVE', 'PAUSED')
+      LIMIT 1
+      FOR UPDATE OF g`;
+    if (liveGames[0]) {
+      const lobbyPlayers = await tx`SELECT gp.account_id, gp.seat_index, gp.returned_at, a.username, a.avatar_url
+        FROM game_players gp
+        JOIN accounts a ON a.id = gp.account_id
+        WHERE gp.game_id = ${liveGames[0].id}
+        ORDER BY gp.seat_index ASC`;
+      return {
+        ok: true,
+        gameId: liveGames[0].id,
+        save: serializeSave(save),
+        status: liveGames[0].status,
+        players: lobbyPlayers.map(player => ({
+          accountId: player.account_id,
+          seatIndex: Number(player.seat_index),
+          username: player.username,
+          avatarUrl: player.avatar_url || null,
+          returnedAt: player.returned_at || null,
+        })),
+        reusedExistingGame: true,
+      };
+    }
+
+    // Repeated clicks on Resume should reuse the same waiting resume lobby
+    // instead of creating duplicate games for the same save.
+    const pendingGames = await tx`SELECT id, status FROM games
+      WHERE resume_save_id = ${normalizedSaveId}
+        AND host_account_id = ${account.id}
+        AND status = 'WAITING'
+      ORDER BY updated_at DESC
+      LIMIT 1
+      FOR UPDATE`;
+    if (pendingGames[0]) {
+      await tx`UPDATE game_players SET returned_at = now()
+        WHERE game_id = ${pendingGames[0].id} AND account_id = ${account.id} AND returned_at IS NULL`;
+      const lobbyPlayers = await tx`SELECT gp.account_id, gp.seat_index, gp.returned_at, a.username, a.avatar_url
+        FROM game_players gp
+        JOIN accounts a ON a.id = gp.account_id
+        WHERE gp.game_id = ${pendingGames[0].id}
+        ORDER BY gp.seat_index ASC`;
+      return {
+        ok: true,
+        gameId: pendingGames[0].id,
+        save: serializeSave(save),
+        status: 'WAITING',
+        players: lobbyPlayers.map(player => ({
+          accountId: player.account_id,
+          seatIndex: Number(player.seat_index),
+          username: player.username,
+          avatarUrl: player.avatar_url || null,
+          returnedAt: player.returned_at || null,
+        })),
+        reusedResumeLobby: true,
+      };
+    }
+
     const gameId = randomUUID();
     await tx`INSERT INTO games (id, host_account_id, status, selected_board_id, resume_save_id, created_at, started_at, updated_at)
       VALUES (${gameId}, ${account.id}, ${'WAITING'}, ${save.selected_board_id || null}, ${normalizedSaveId}, now(), NULL, now())`;
