@@ -53,12 +53,6 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
   const rows = await db`
     SELECT
       g.status,
-      EXISTS (
-        SELECT 1
-        FROM game_players gp
-        WHERE gp.game_id = g.id
-          AND gp.account_id = ${account.id}
-      ) AS is_member,
       gs.version,
       CASE
         WHEN ${knownVersion}::int IS NULL OR gs.version <> ${knownVersion}::int
@@ -81,17 +75,19 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
           )
         ELSE NULL
       END AS result_json
-    FROM games g
+    FROM game_players gp
+    JOIN games g ON g.id = gp.game_id
     LEFT JOIN game_states gs ON gs.id = g.id
-    WHERE g.id = ${normalizedGameId}
+    WHERE gp.game_id = ${normalizedGameId}
+      AND gp.account_id = ${account.id}
   `;
 
   const row = rows[0];
   if (!row) {
-    return err('GAME_NOT_FOUND', 'Game not found.', 404);
-  }
-  if (!row.is_member) {
-    return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
+    const gameRows = await db`SELECT 1 FROM games WHERE id = ${normalizedGameId}`;
+    return gameRows[0]
+      ? err('NOT_IN_GAME', 'You are not a member of this game.', 403)
+      : err('GAME_NOT_FOUND', 'Game not found.', 404);
   }
   if (row.version == null) {
     return err('GAME_NOT_FOUND', 'Game state not found.', 404);
