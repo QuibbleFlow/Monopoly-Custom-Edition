@@ -7,9 +7,9 @@
 
   const chance = [
     { text: 'Advance to GO. Collect $200.', action: 'moveTo', value: 0 },
-    { text: 'Advance to Burlington.', action: 'moveTo', value: 24 },
-    { text: 'Take a trip to the Lakeshore West Line.', action: 'moveTo', value: 5 },
-    { text: 'Advance to Saint-Louis-du-Ha! Ha!.', action: 'moveTo', value: 39 },
+    { text: 'Advance to Illinois Avenue.', action: 'moveTo', value: 24 },
+    { text: 'Take a trip to Reading Railroad.', action: 'moveTo', value: 5 },
+    { text: 'Advance to Boardwalk.', action: 'moveTo', value: 39 },
     { text: 'Bank pays you a dividend of $50.', action: 'money', value: 50 },
     { text: 'Go back 3 spaces.', action: 'moveBack', value: 3 },
     { text: 'Go directly to Jail.', action: 'jail' },
