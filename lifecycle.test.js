@@ -303,9 +303,8 @@ test('only the host can start a waiting lobby with enough players and the engine
   assert.equal(started.version, 1);
   assert.equal(started.state.players.length, 2);
   assert.equal(db.state.states[0].board.spaces.length, 40);
-  assert.equal(db.state.saves.length, 1, 'starting the actual match creates its save slot');
-  assert.equal(db.state.saves[0].source_game_id, created.gameId);
-  assert.equal(db.state.saves[0].version, 1);
+  assert.equal(db.state.saves.length, 0, 'starting a match must not create a save file');
+  assert.equal(started.saveId, undefined);
 });
 
 test('lobby reads are restricted to members and my-games lists the account memberships', async () => {
@@ -1028,8 +1027,12 @@ test('avatars enter new matches and saves, refresh on actions, and disappear aft
   const snapshot = engine.deserializeState(db.state.states[0].state);
   assert.equal(snapshot.players[0].avatarUrl, 'https://example.com/alice.png');
   assert.equal(snapshot.players[1].avatarUrl, 'https://example.com/bob.png');
+  await pauseGame({ account: { id: 'account-a' }, gameId: created.gameId, expectedVersion: 1, db });
   const savedPlayers = typeof db.state.saves[0].players === 'string' ? JSON.parse(db.state.saves[0].players) : db.state.saves[0].players;
   assert.equal(savedPlayers[0].avatarUrl, 'https://example.com/alice.png');
+  await joinGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
+  await resumeGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
   editStoredGameState(db, state => { state.turnOrder = [0, 1]; state.current = 0; });
   db.state.accounts['account-a'].avatar_url = 'https://example.com/new.png';
   db.state.accounts['account-b'].avatar_url = null;
@@ -1037,4 +1040,48 @@ test('avatars enter new matches and saves, refresh on actions, and disappear aft
   assert.equal(result.ok, true);
   assert.equal(result.state.players[0].avatarUrl, 'https://example.com/new.png');
   assert.equal(result.state.players[1].avatarUrl, null);
+});
+
+
+test('first Save & Quit creates a player-named save and later pauses reuse it with its chosen name', async () => {
+  const db = makeDb();
+  db.state.accounts['account-a'].username = 'Goalie';
+  db.state.accounts['account-b'].username = 'QuibbleFlow';
+  db.state.accounts['account-c'].username = 'GamerGriffGG';
+  const created = await createGame({ account: { id: 'account-a' }, db });
+  await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
+  await joinGame({ account: { id: 'account-c' }, gameId: created.gameId, db });
+  await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  assert.equal(db.state.saves.length, 0);
+  editStoredGameState(db, state => { state.players[1].money = 1234; state.boardNames[0] = 'Custom Start'; });
+  const paused = await pauseGame({ account: { id: 'account-a' }, gameId: created.gameId, expectedVersion: 1, db });
+  assert.equal(paused.ok, true);
+  assert.equal(db.state.saves.length, 1);
+  assert.equal(db.state.saves[0].name, '(Goalie, QuibbleFlow, GamerGriffGG)');
+  assert.equal(engine.deserializeState(db.state.saves[0].state).players[1].money, 1234);
+  assert.equal(engine.deserializeState(db.state.saves[0].state).boardNames[0], 'Custom Start');
+  db.state.saves[0].name = 'My chosen name';
+  for (const id of ['account-a', 'account-b', 'account-c']) await joinGame({ account: { id }, gameId: created.gameId, db });
+  await resumeGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  const again = await pauseGame({ account: { id: 'account-a' }, gameId: created.gameId, expectedVersion: 1, db });
+  assert.equal(again.ok, true);
+  assert.equal(again.saveId, paused.saveId);
+  assert.equal(db.state.saves.length, 1);
+  assert.equal(db.state.saves[0].name, 'My chosen name');
+});
+
+
+test('long player lists produce a valid save name and generic legacy save names gain player names', async () => {
+  const { db, gameId } = await createActiveGame();
+  editStoredGameState(db, state => { state.players[0].name = 'A'.repeat(70); state.players[1].name = 'B'.repeat(70); });
+  const paused = await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 1, db });
+  assert.equal(paused.ok, true);
+  assert.ok(db.state.saves[0].name.length <= 80);
+  assert.ok(db.state.saves[0].name.startsWith('(') && db.state.saves[0].name.endsWith(')'));
+  db.state.saves[0].name = 'Server game';
+  for (const id of ['account-a', 'account-b']) await joinGame({ account: { id }, gameId, db });
+  await resumeGame({ account: { id: 'account-a' }, gameId, db });
+  await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 1, db });
+  assert.notEqual(db.state.saves[0].name, 'Server game');
+  assert.equal(db.state.saves.length, 1);
 });

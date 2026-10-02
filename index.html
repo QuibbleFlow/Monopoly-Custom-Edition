@@ -1344,6 +1344,8 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
 
 
 .player-avatar-image{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}.player-avatar-image[hidden]{display:none}.avatar,.tk-dot{overflow:hidden}.pill .avatar{flex-shrink:0}
+
+.match-menu-tabs{margin-bottom:20px}.match-menu-options{margin-top:18px}.match-menu-options summary{cursor:pointer;font-weight:700;margin-bottom:12px}.match-menu-row{gap:16px}.match-menu-row .social-name{min-width:0;overflow-wrap:anywhere}.match-menu-row p{margin:5px 0 0;font-weight:400}.match-menu-row>.btn{flex-shrink:0}
 </style>
 </head>
 
@@ -3533,8 +3535,10 @@ async function handleServerGamePaused(gameId, refreshGames = false) {
   popup = null;
   stopGameTick();
   backendLobby = null;
-  setup.screen = '';
-  accountMessage = 'This match is paused. The original players can rejoin from My server games.';
+  setup.screen = 'serverCreate';
+  serverCreateTab = 'continue';
+  backendSocialError = 'Match saved. All original players must return to resume.';
+  accountMessage = 'Match saved. Open Continue to resume.';
   if (refreshGames) await refreshBackendMyGames();
   renderSetup();
 }
@@ -5368,6 +5372,7 @@ async function refreshBackendMyGames() {
 
 function backendCreateGame() {
   backendLobby = null;
+  serverCreateTab = 'new';
   setup.screen = 'serverCreate';
   renderSetup();
   if (accountUser) {
@@ -5679,54 +5684,31 @@ function incomingGameInvitationsHTML() {
   </div>`;
 }
 
-function backendSaveRowHTML(save) {
-  const live = backendMyGames.find(game =>
-    (game.gameId || game.id) === save.sourceGameId &&
-    ['ACTIVE', 'PAUSED'].includes(game.status)
-  );
-  const status = live ? live.status : (save.status === 'LOADED' ? 'RESUME READY' : 'SAVED');
-  const action = live
-    ? `backendOpenGame('${esc(live.gameId || live.id)}')`
-    : `backendResumeFromSave('${esc(save.saveId)}')`;
-  const label = live?.status === 'ACTIVE' ? 'Continue'
-    : live?.status === 'PAUSED' ? 'Rejoin'
-    : 'Resume';
-  const updated = new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleString();
-  return `<div class="social-row">
-    <span class="social-name">${esc(save.name)}</span>
-    <span class="tag">${esc(status)}</span>
-    <span class="tag">${(save.players || []).length} players</span>
-    <span class="tag">v${Number(save.version) || 1}</span>
-    <span class="tag">${esc(updated)}</span>
-    <button class="btn alt" onclick="${action}">${label}</button>
-  </div>`;
+let serverCreateTab = 'new';
+function setServerCreateTab(tab) {
+  serverCreateTab = tab === 'continue' ? 'continue' : 'new';
+  renderSetup();
 }
-
+function backendSaveRowHTML(save) {
+  const live = backendMyGames.find(game => (game.gameId || game.id) === save.sourceGameId && ['ACTIVE', 'PAUSED'].includes(game.status));
+  const action = live ? (live.status === 'PAUSED' ? `backendRejoinPausedGame('${esc(live.gameId || live.id)}')` : `backendOpenGame('${esc(live.gameId || live.id)}')`) : `backendResumeFromSave('${esc(save.saveId)}')`;
+  const updated = new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleDateString();
+  return `<div class="social-row match-menu-row"><div class="social-name"><strong>${esc(save.name)}</strong><p class="muted">${esc((save.players || []).map(player => player.username || 'Player').join(', '))} · Saved ${esc(updated)}</p></div><button class="btn" onclick="${action}">${live?.status === 'ACTIVE' ? 'Continue' : live?.status === 'PAUSED' ? 'Rejoin' : 'Resume'}</button></div>`;
+}
 function renderServerCreateSetup() {
-  const saves = backendSaves.length
-    ? backendSaves.map(backendSaveRowHTML).join('')
-    : '<p class="muted">No saved matches yet.</p>';
-
+  const openGames = backendMyGames.filter(game => ['WAITING', 'ACTIVE', 'PAUSED'].includes(game.status) && !backendSaves.some(save => save.sourceGameId === (game.gameId || game.id)));
+  const openRows = openGames.map(game => {
+    const id = game.gameId || game.id;
+    return `<div class="social-row match-menu-row"><div class="social-name"><strong>${esc(game.name || 'Match')}</strong><p class="muted">${game.status === 'WAITING' ? 'Waiting in lobby' : game.status === 'PAUSED' ? 'Waiting for original players' : 'Match in progress'}</p></div><button class="btn" onclick="${game.status === 'PAUSED' ? `backendRejoinPausedGame('${esc(id)}')` : `backendOpenGame('${esc(id)}')`}">${game.status === 'ACTIVE' ? 'Continue' : game.status === 'PAUSED' ? 'Rejoin' : 'Open lobby'}</button></div>`;
+  }).join('');
   $('app').innerHTML = `<div class="setup">
-    <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
-    <p class="sub">Create game</p>
-    ${!accountUser ? `<button class="btn" type="button" onclick="toggleCornerMenu('profile')">Sign in</button>` : ''}
-    <div class="panel acc-blue">
-      <h2>Start a new match</h2>
-      <p class="muted">This creates the new multiplayer match only after you choose it. Your older saves stay listed below.</p>
-      <p class="muted">Board: ${esc(selectedHostBoard ? selectedHostBoard.name : 'Classic board')}</p>
-      <div class="row">
-        <button class="btn" ${!accountUser || backendLobbyController.inFlight ? 'disabled' : ''} onclick="backendStartNewMatch()">${backendLobbyController.inFlight ? 'Starting…' : 'Start a new match'}</button>
-        <button class="btn alt" type="button" onclick="openBoardsScreen(true)">Choose board</button>
-      </div>
-      ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
-    </div>
-    <div class="panel acc-green">
-      <h2>Old save files</h2>
-      ${saves}
-    </div>
-    <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
-  </div>`;
+    <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div><p class="sub">Multiplayer</p>
+    <div class="seg match-menu-tabs" role="tablist" aria-label="Match menu"><button class="btn ${serverCreateTab === 'new' ? '' : 'alt'}" role="tab" aria-selected="${serverCreateTab === 'new'}" onclick="setServerCreateTab('new')">New match</button><button class="btn ${serverCreateTab === 'continue' ? '' : 'alt'}" role="tab" aria-selected="${serverCreateTab === 'continue'}" onclick="setServerCreateTab('continue')">Continue</button></div>
+    ${!accountUser ? `<button class="btn" onclick="toggleCornerMenu('profile')">Sign in</button>` : ''}
+    ${serverCreateTab === 'new' ? `<div class="panel acc-blue"><h2>Start a new match</h2><p class="muted">Invite your friends, then start together. A save file is created the first time you choose Save &amp; Quit.</p><button class="btn" ${!accountUser || backendLobbyController.inFlight ? 'disabled' : ''} onclick="backendStartNewMatch()">${backendLobbyController.inFlight ? 'Starting…' : 'Start a new match'}</button><details class="match-menu-options"><summary>Board: ${esc(selectedHostBoard?.name || 'Classic board')}</summary><button class="btn alt" onclick="openBoardsScreen(true)">Choose board</button></details>${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}</div>`
+      : `<div class="panel acc-green"><h2>Continue playing</h2>${openRows}${backendSaves.map(backendSaveRowHTML).join('')}${!openGames.length && !backendSaves.length ? '<p class="muted">No open matches or saves yet.</p>' : ''}</div>`}
+    ${backendSocialError ? `<p role="status">${esc(backendSocialError)}</p>` : ''}
+    <button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>`;
 }
 
 function renderServerLobbySetup() {
@@ -5739,11 +5721,12 @@ function renderServerLobbySetup() {
     <div class="panel acc-blue">
       <h2>Server match <span class="tag">${esc(status)}</span></h2>
       <p class="muted">Hosted by ${esc(host?.username || 'a player')}</p>
-      <div class="row">
+      <button class="btn alt" onclick="openFriendsScreen()">Invite friends</button>
+      <details class="match-menu-options"><summary>Match options</summary><div class="row">
         <button class="btn alt" onclick="backendRefreshLobby('${esc(lobby.gameId)}')">Refresh</button>
         <button class="btn alt" onclick="backendLeaveGame('${esc(lobby.gameId)}')">Leave</button>
-        <button class="btn alt" onclick="openServerJoin()">Invitations</button>
-      </div>
+        ${isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(lobby.gameId)}','${esc(lobby.game?.name || 'Match')}')">Rename</button><button class="btn alt" onclick="backendDeleteGame('${esc(lobby.gameId)}')">Delete</button>` : ''}
+      </div></details>
       ${backendLobbyPlayersHTML(lobby.players, status === 'PAUSED' || isSnapshotResume ? 'Original players' : 'Players', {
         isPaused: status === 'PAUSED', isResume: isSnapshotResume,
       })}
@@ -5762,35 +5745,13 @@ function renderServerLobbySetup() {
         : `<button class="btn" onclick="backendStartNewMatch()">Start a new match</button>`}
       ${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}
     </div>`;
-  const gamesPanel = backendMyGames.length ? `
-    <div class="panel acc-yellow">
-      <h2>My server games</h2>
-      ${backendMyGames.map(game => {
-        const gameId = game.gameId || game.id;
-        const statusTag = ['WAITING', 'ACTIVE', 'PAUSED'].includes(game.status) ? game.status : 'FINISHED';
-        const openAction = statusTag === 'PAUSED'
-          ? `<button class="btn" onclick="backendRejoinPausedGame('${esc(gameId)}')">Rejoin</button>`
-          : `<button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">${statusTag === 'ACTIVE' ? 'Continue' : 'Open'}</button>`;
-        return `<div class="social-row"><span class="social-name">${esc(game.name || 'Server game')}</span>
-          <span class="tag">${statusTag}</span>${openAction}
-          ${game.isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(gameId)}','${esc(game.name || 'Server game')}')">Rename</button>
-          <button class="btn alt" onclick="backendDeleteGame('${esc(gameId)}')">Delete</button>` : ''}
-        </div>`;
-      }).join('')}
-    </div>` : '';
-  const savesPanel = backendSaves.length ? `
-    <div class="panel acc-green">
-      <h2>Saved games</h2>
-      ${backendSaves.map(backendSaveRowHTML).join('')}
-    </div>` : '';
-
   $('app').innerHTML = `<div class="setup">
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
     <p class="sub">Server multiplayer</p>
     ${!accountUser ? `<button class="btn" type="button" onclick="toggleCornerMenu('profile')">Sign in</button>` : ''}
-    ${lobbyPanel}${incomingGameInvitationsHTML()}${gamesPanel}${savesPanel}
+    ${lobbyPanel}${incomingGameInvitationsHTML()}
     ${backendSocialError ? `<p class="error" role="alert">${esc(backendSocialError)}</p>` : ''}
-    <div class="panel acc-red"><button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>
+    <button class="btn alt" onclick="serverCreateTab='continue'; setup.screen='serverCreate'; stopBackendLobbyPolling(); renderSetup()">Match menu</button>
   </div>`;
 }
 
@@ -6161,6 +6122,12 @@ function howToPlayHTML() {
 }
 
 function renderSetup() {
+  // Lobby requests and menu callbacks may finish after the match has loaded.
+  // They must never replace a multiplayer board with the setup screen.
+  if (game && ((window.authoritativeGame?.gameId && ['ACTIVE', 'FINISHED'].includes(window.authoritativeGame.status)) || net.role)) {
+    if (!$('board')) attachGame();
+    return;
+  }
   ensureCornerMenus();
   if (setup.screen === 'host') { renderHostSetup(); return; }
   if (setup.screen === 'join') { renderJoinSetup(); return; }

@@ -355,19 +355,6 @@ async function startGame({ account, gameId, db = database() }) {
       VALUES (${normalizedGameId}, ${account.id}, ${serialized}::jsonb, ${JSON.stringify(board)}::jsonb, ${1})
       ON CONFLICT (id) DO UPDATE SET owner_id = EXCLUDED.owner_id, state = EXCLUDED.state, board = EXCLUDED.board, version = EXCLUDED.version, updated_at = now()`;
 
-    // Create the save slot only when the match itself starts. Opening the
-    // Create Game screen or making a waiting lobby does not create a save.
-    const saveId = randomUUID();
-    const savePlayers = players.map(player => ({
-      accountId: player.account_id,
-      seatIndex: Number(player.seat_index),
-      username: player.username,
-      avatarUrl: player.avatar_url || null,
-    }));
-    await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
-      VALUES (${saveId}, ${account.id}, ${normalizedGameId}, ${game.name || 'Server game'}, ${'SAVED'}, ${1},
-        ${JSON.stringify(serialized)}::jsonb, ${JSON.stringify(board)}::jsonb, ${JSON.stringify(savePlayers)}::jsonb, ${game.selected_board_id || null})`;
-
     await tx`UPDATE games SET status = ${'ACTIVE'}, started_at = now(), updated_at = now() WHERE id = ${normalizedGameId}`;
 
     const updated = await tx`SELECT * FROM games WHERE id = ${normalizedGameId}`;
@@ -377,7 +364,6 @@ async function startGame({ account, gameId, db = database() }) {
       game: serializeGameRow(updated[0]),
       status: 'ACTIVE',
       version: 1,
-      saveId,
       state,
       events: orderResult.events,
       players: players.map(player => ({
@@ -419,14 +405,28 @@ async function pauseGame({ account, gameId, expectedVersion, db = database() }) 
       return err('PLAYER_ROSTER_MISMATCH', 'The authoritative state does not match the original player seats.', 409);
     }
 
-    // Save & Quit refreshes the save slot once, at pause time. Avoiding an
-    // extra save-table write on every action keeps gameplay latency low.
-    await tx`UPDATE game_saves
-      SET status = ${'SAVED'}, version = ${version},
-          state = ${JSON.stringify(engine.serializeState(state))}::jsonb,
-          board = ${JSON.stringify(stateRow.board || {})}::jsonb,
-          updated_at = now()
-      WHERE source_game_id = ${normalizedGameId} AND owner_id = ${account.id}`;
+    // The first Save & Quit creates the only save slot for this match.
+    // Later pauses update it, preserving any name the host has chosen.
+    const saved = await tx`SELECT id, name FROM game_saves
+      WHERE source_game_id = ${normalizedGameId} AND owner_id = ${account.id}
+      ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`;
+    const saveId = saved[0]?.id || randomUUID();
+    const names = state.players.map(player => player.name);
+    const fullName = `(${names.join(', ')})`;
+    const nameBudget = Math.floor((78 - (names.length - 1) * 2) / names.length);
+    const defaultName = fullName.length <= 80 ? fullName
+      : `(${names.map(name => name.length > nameBudget ? name.slice(0, nameBudget - 1) + '…' : name).join(', ')})`;
+    const saveName = saved[0]?.name && saved[0].name !== 'Server game' ? saved[0].name : defaultName;
+    const metadata = state.players.map(player => ({
+      accountId: player.accountId, seatIndex: player.id,
+      username: player.name, avatarUrl: player.avatarUrl || null,
+    }));
+    if (saved[0]) {
+      await tx`UPDATE game_saves SET name = ${saveName}, source_game_id = ${normalizedGameId}, status = ${'SAVED'}, version = ${version}, state = ${JSON.stringify(state)}::jsonb, board = ${JSON.stringify(stateRow.board || {})}::jsonb, players = ${JSON.stringify(metadata)}::jsonb, selected_board_id = ${game.selected_board_id || null}, updated_at = now() WHERE id = ${saveId} AND owner_id = ${account.id}`;
+    } else {
+      await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
+        VALUES (${saveId}, ${account.id}, ${normalizedGameId}, ${saveName}, ${'SAVED'}, ${version}, ${JSON.stringify(state)}::jsonb, ${JSON.stringify(stateRow.board || {})}::jsonb, ${JSON.stringify(metadata)}::jsonb, ${game.selected_board_id || null})`;
+    }
 
     await tx`UPDATE game_players SET returned_at = NULL WHERE game_id = ${normalizedGameId}`;
     await tx`UPDATE games SET status = ${'PAUSED'}, paused_at = now(), updated_at = now()
@@ -435,6 +435,7 @@ async function pauseGame({ account, gameId, expectedVersion, db = database() }) 
       ok: true,
       gameId: normalizedGameId,
       status: 'PAUSED',
+      saveId,
       version,
       state,
       board: stateRow.board || {},

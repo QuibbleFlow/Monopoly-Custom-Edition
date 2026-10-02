@@ -481,15 +481,15 @@ function makeDb(initial = makeDbState()) {
       }
       return [{ ok: true }];
     }
-    if (query.startsWith('SELECT id FROM game_saves WHERE source_game_id = $1 AND owner_id = $2 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE')) {
+    if (query.startsWith('SELECT id FROM game_saves WHERE source_game_id = $1 AND owner_id = $2 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE') || query.startsWith('SELECT id, name FROM game_saves WHERE source_game_id = $1 AND owner_id = $2 ORDER BY updated_at DESC LIMIT 1 FOR UPDATE')) {
       return state.saves
         .filter(save => save.source_game_id === values[0] && save.owner_id === values[1])
         .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
         .slice(0, 1)
-        .map(save => ({ id: save.id }));
+        .map(save => ({ id: save.id, name: save.name }));
     }
     if (query.startsWith('SELECT id FROM game_saves WHERE id = $1 AND owner_id = $2 FOR UPDATE')) {
-      return state.saves.filter(save => save.id === values[0] && save.owner_id === values[1]).map(save => ({ id: save.id }));
+      return state.saves.filter(save => save.id === values[0] && save.owner_id === values[1]).map(save => ({ id: save.id, name: save.name }));
     }
     if (query.startsWith('UPDATE game_saves SET name = $1, source_game_id = $2, status = $3, version = $4, state = $5::jsonb, board = $6::jsonb, players = $7::jsonb, selected_board_id = $8, updated_at = now() WHERE id = $9 AND owner_id = $10')) {
       const save = state.saves.find(entry => entry.id === values[8] && entry.owner_id === values[9]);

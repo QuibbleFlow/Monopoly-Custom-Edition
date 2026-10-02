@@ -479,6 +479,7 @@ async function removeFriendAccount(id) {
 }
 
 function openBoardsScreen(selectingForHost = false) {
+  boardsScreenState.returnScreen = selectingForHost ? setup.screen : '';
   boardsScreenState.selectingForHost = selectingForHost;
   boardsScreenState.editor = null;
   boardsScreenState.status = 'Loading your boards...';
@@ -527,7 +528,7 @@ function renderBoardsScreen() {
     </div>
     <div class="panel acc-orange"><h2>My boards</h2><div class="social-list">${boardRows}</div></div>
     ${boardsScreenState.status ? `<p class="${boardsScreenState.status.startsWith('Could') || boardsScreenState.status.includes('unavailable') ? 'error' : 'muted'}" role="status">${esc(boardsScreenState.status)}</p>` : ''}
-    <button class="btn alt" type="button" onclick="setup.screen='${boardsScreenState.selectingForHost ? 'host' : ''}'; renderSetup()">Back</button>
+    <button class="btn alt" type="button" onclick="setup.screen='${boardsScreenState.selectingForHost ? (boardsScreenState.returnScreen || 'host') : ''}'; renderSetup()">Back</button>
   </div>`;
 }
 
@@ -700,13 +701,13 @@ async function shareCustomBoard(id) {
 
 function selectCustomBoard(id) {
   selectedHostBoard = boardsScreenState.boards.find(board => board.id === id) || null;
-  setup.screen = boardsScreenState.selectingForHost ? 'host' : '';
+  setup.screen = boardsScreenState.selectingForHost ? (boardsScreenState.returnScreen || 'host') : '';
   renderSetup();
 }
 
 function selectClassicBoard() {
   selectedHostBoard = null;
-  setup.screen = boardsScreenState.selectingForHost ? 'host' : '';
+  setup.screen = boardsScreenState.selectingForHost ? (boardsScreenState.returnScreen || 'host') : '';
   renderSetup();
 }
 
