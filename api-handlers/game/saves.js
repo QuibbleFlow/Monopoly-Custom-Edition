@@ -91,9 +91,11 @@ async function saveGame({ account, gameId, name, saveId = null, db = database() 
       avatarUrl: player.avatar_url || null,
     }));
     let id = saveId;
+    let existingSave = false;
     if (saveId) {
       const owned = await tx`SELECT id FROM game_saves WHERE id = ${saveId} AND owner_id = ${account.id} FOR UPDATE`;
       if (!owned[0]) return err('SAVE_NOT_FOUND', 'Save not found.', 404);
+      existingSave = true;
     } else {
       // One match owns one canonical save slot. Repeated saves update it
       // instead of silently creating duplicate entries for the same match.
@@ -101,10 +103,10 @@ async function saveGame({ account, gameId, name, saveId = null, db = database() 
         WHERE source_game_id = ${normalizedGameId} AND owner_id = ${account.id}
         ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`;
       id = existing[0]?.id || randomUUID();
+      existingSave = !!existing[0];
     }
 
-    const existingId = await tx`SELECT id FROM game_saves WHERE id = ${id} AND owner_id = ${account.id} FOR UPDATE`;
-    if (existingId[0]) {
+    if (existingSave) {
       await tx`UPDATE game_saves SET name = ${normalizedName}, source_game_id = ${normalizedGameId}, status = ${'SAVED'}, version = ${version}, state = ${JSON.stringify(checked.state)}::jsonb, board = ${JSON.stringify(board)}::jsonb, players = ${JSON.stringify(metadata)}::jsonb, selected_board_id = ${game.selected_board_id || null}, updated_at = now() WHERE id = ${id} AND owner_id = ${account.id}`;
     } else {
       await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
@@ -118,7 +120,17 @@ async function saveGame({ account, gameId, name, saveId = null, db = database() 
 async function listSaves({ account, db = database() }) {
   if (!account?.id) return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   const rows = await db`SELECT id, owner_id, source_game_id, name, status, version, players, selected_board_id, created_at, updated_at FROM game_saves WHERE owner_id = ${account.id} ORDER BY updated_at DESC`;
-  return { ok: true, saves: rows.map(serializeSave) };
+  // Older builds could create multiple rows for the same match. Keep the
+  // newest one visible without destructively deleting any historical data.
+  const seenSourceGames = new Set();
+  const saves = [];
+  for (const row of rows) {
+    const source = row.source_game_id || row.id;
+    if (seenSourceGames.has(source)) continue;
+    seenSourceGames.add(source);
+    saves.push(serializeSave(row));
+  }
+  return { ok: true, saves };
 }
 
 async function loadGame({ account, saveId, db = database() }) {
