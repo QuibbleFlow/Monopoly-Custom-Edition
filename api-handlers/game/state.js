@@ -30,7 +30,7 @@ function redactEventsForAccount(events, state, accountId) {
   ].includes(event.type));
 }
 
-async function getGameState({ account, gameId, db = database() }) {
+async function getGameState({ account, gameId, sinceVersion = null, sinceStatus = null, db = database() }) {
   if (!account || !account.id) {
     return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   }
@@ -40,10 +40,16 @@ async function getGameState({ account, gameId, db = database() }) {
     return err('INVALID_GAME_ID', 'A valid gameId is required.', 400);
   }
 
-  // One statement gives a consistent snapshot of status, membership,
-  // authoritative state, and the latest event payload. Active clients poll
-  // this endpoint frequently, so avoiding a transaction plus four separate
-  // round trips materially reduces server multiplayer latency.
+  const knownVersion = Number.isInteger(Number(sinceVersion)) && Number(sinceVersion) > 0
+    ? Number(sinceVersion)
+    : null;
+  const knownStatus = typeof sinceStatus === 'string' && sinceStatus.trim()
+    ? sinceStatus.trim()
+    : null;
+
+  // Idle polls are the common case. When the caller already has this exact
+  // version/status, Postgres returns only tiny metadata instead of serializing
+  // the full JSON game state, board, and event payload five times per second.
   const rows = await db`
     SELECT
       g.status,
@@ -54,15 +60,27 @@ async function getGameState({ account, gameId, db = database() }) {
           AND gp.account_id = ${account.id}
       ) AS is_member,
       gs.version,
-      gs.state,
-      gs.board,
-      (
-        SELECT ar.result_json
-        FROM game_action_requests ar
-        WHERE ar.game_id = g.id
-        ORDER BY ar.created_at DESC
-        LIMIT 1
-      ) AS result_json
+      CASE
+        WHEN ${knownVersion}::int IS NULL OR gs.version <> ${knownVersion}::int
+          THEN gs.state
+        ELSE NULL
+      END AS state,
+      CASE
+        WHEN ${knownVersion}::int IS NULL OR gs.version <> ${knownVersion}::int
+          THEN gs.board
+        ELSE NULL
+      END AS board,
+      CASE
+        WHEN ${knownVersion}::int IS NULL OR gs.version <> ${knownVersion}::int
+          THEN (
+            SELECT ar.result_json
+            FROM game_action_requests ar
+            WHERE ar.game_id = g.id
+            ORDER BY ar.created_at DESC
+            LIMIT 1
+          )
+        ELSE NULL
+      END AS result_json
     FROM games g
     LEFT JOIN game_states gs ON gs.id = g.id
     WHERE g.id = ${normalizedGameId}
@@ -75,11 +93,38 @@ async function getGameState({ account, gameId, db = database() }) {
   if (!row.is_member) {
     return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
   }
-  if (row.state == null || row.version == null) {
+  if (row.version == null) {
     return err('GAME_NOT_FOUND', 'Game state not found.', 404);
   }
 
   const version = Number(row.version) || 1;
+  const unchanged = knownVersion === version && knownStatus === row.status;
+  if (unchanged) {
+    return {
+      ok: true,
+      gameId: normalizedGameId,
+      status: row.status,
+      version,
+      unchanged: true,
+    };
+  }
+
+  // A status-only transition, such as ACTIVE -> PAUSED, can keep the same
+  // state version. The caller already owns that state, so there is no reason
+  // to deserialize and resend it.
+  if (row.state == null && knownVersion === version) {
+    return {
+      ok: true,
+      gameId: normalizedGameId,
+      status: row.status,
+      version,
+      unchanged: false,
+    };
+  }
+  if (row.state == null) {
+    return err('GAME_NOT_FOUND', 'Game state not found.', 404);
+  }
+
   const state = engine.deserializeState(row.state);
   let events = [];
   let actionResult = row.result_json;
@@ -96,6 +141,7 @@ async function getGameState({ account, gameId, db = database() }) {
     gameId: normalizedGameId,
     status: row.status,
     version,
+    unchanged: false,
     state: visibleState,
     events: redactEventsForAccount(events, state, account.id),
     board: row.board || {},
@@ -116,7 +162,16 @@ async function handleGetGameStateRoute(req, res, deps = {}) {
 
   const url = new URL(req.url, 'http://localhost');
   const gameId = url.searchParams.get('gameId') || url.searchParams.get('game_id');
-  const result = await getGameState({ account, gameId, db: deps.database ? deps.database() : database() });
+  const sinceVersionValue = url.searchParams.get('sinceVersion') || url.searchParams.get('since_version');
+  const sinceVersion = sinceVersionValue == null ? null : Number(sinceVersionValue);
+  const sinceStatus = url.searchParams.get('sinceStatus') || url.searchParams.get('since_status');
+  const result = await getGameState({
+    account,
+    gameId,
+    sinceVersion,
+    sinceStatus,
+    db: deps.database ? deps.database() : database(),
+  });
 
   if (!result.ok) {
     return res.status(result.status).json({ error: result.error });
@@ -127,6 +182,7 @@ async function handleGetGameStateRoute(req, res, deps = {}) {
     gameId: result.gameId,
     status: result.status,
     version: result.version,
+    unchanged: !!result.unchanged,
     state: result.state,
     events: result.events,
     board: result.board,
