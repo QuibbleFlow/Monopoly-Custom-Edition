@@ -496,8 +496,7 @@ test('player authorization and stale version checks are enforced', async () => {
   baseState.started = true;
   baseState.phase = 'roll';
   const sql = tagSql({
-    'SELECT status, host_account_id FROM games WHERE id = $1 FOR UPDATE': [{ status: 'ACTIVE', host_account_id: 'account-a' }],
-    'SELECT id, version, state, board FROM game_states WHERE id = $1 FOR UPDATE': [{ id: 'game-1', version: 2, state: engine.serializeState(baseState), board: { spaces } }],
+    'SELECT g.status, g.host_account_id, gs.id, gs.version, gs.state, gs.board FROM games g JOIN game_states gs ON gs.id = g.id WHERE g.id = $1 FOR UPDATE OF g, gs': [{ status: 'ACTIVE', host_account_id: 'account-a', id: 'game-1', version: 2, state: engine.serializeState(baseState), board: { spaces } }],
   });
   const res = makeRes();
   await handleGameAction({ method: 'POST', body: { gameId: 'game-1', action: { type: 'ROLL_DICE', playerId: 1 }, version: 1 }, headers: {} }, res, {
@@ -521,8 +520,7 @@ test('valid action flow generates server-controlled dice and increments version'
   baseState.started = true;
   baseState.phase = 'roll';
   const sql = tagSql({
-    'SELECT status, host_account_id FROM games WHERE id = $1 FOR UPDATE': [{ status: 'ACTIVE', host_account_id: 'account-a' }],
-    'SELECT id, version, state, board FROM game_states WHERE id = $1 FOR UPDATE': [{ id: 'game-1', version: 1, state: engine.serializeState(baseState), board: { spaces } }],
+    'SELECT g.status, g.host_account_id, gs.id, gs.version, gs.state, gs.board FROM games g JOIN game_states gs ON gs.id = g.id WHERE g.id = $1 FOR UPDATE OF g, gs': [{ status: 'ACTIVE', host_account_id: 'account-a', id: 'game-1', version: 1, state: engine.serializeState(baseState), board: { spaces } }],
     'UPDATE game_states SET state = $1, version = $2, updated_at = now() WHERE id = $3': [{ ok: true }],
     'INSERT INTO game_action_requests (game_id, request_id, result_json) VALUES ($1, $2, $3) ON CONFLICT (game_id, request_id) DO NOTHING RETURNING result_json': [{ ok: true }],
   });
@@ -553,11 +551,8 @@ test('duplicate request IDs are treated as idempotent and cannot reapply the act
       const value = index < values.length ? `$${index + 1}` : '';
       return result + part + value;
     }, '').replace(/\s+/g, ' ').trim();
-    if (query.startsWith('SELECT status, host_account_id FROM games')) {
-      return [{ status: 'ACTIVE', host_account_id: 'account-a' }];
-    }
-    if (query.startsWith('SELECT id, version, state, board FROM game_states')) {
-      return [{ id: 'game-1', version: 1, state: engine.serializeState(baseState), board: { spaces } }];
+    if (query.startsWith('SELECT g.status, g.host_account_id, gs.id, gs.version, gs.state, gs.board FROM games g JOIN game_states gs')) {
+      return [{ status: 'ACTIVE', host_account_id: 'account-a', id: 'game-1', version: 1, state: engine.serializeState(baseState), board: { spaces } }];
     }
     if (query.startsWith('SELECT result_json FROM game_action_requests')) {
       return seen.has('req-duplicate') ? [{ result_json: JSON.stringify({ ok: true, version: 2, state: baseState, events: [{ type: 'DICE_ROLLED', playerId: 0, dice: [4, 4], isDouble: true }] }) }] : [];
