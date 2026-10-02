@@ -362,6 +362,19 @@ function makeDb(initial = makeDbState()) {
     if (query.startsWith('SELECT host_account_id FROM games WHERE id = $1')) {
       return state.games.filter(game => game.id === values[0]).map(game => ({ host_account_id: game.host_account_id }));
     }
+    if (query.startsWith('SELECT g.status, g.host_account_id, gs.id, gs.version, gs.state, gs.board FROM games g JOIN game_states gs ON gs.id = g.id WHERE g.id = $1 FOR UPDATE OF g, gs')) {
+      const game = state.games.find(entry => entry.id === values[0]);
+      const gameState = state.states.find(entry => entry.id === values[0]);
+      if (!game || !gameState) return [];
+      return [{
+        status: game.status,
+        host_account_id: game.host_account_id,
+        id: gameState.id,
+        version: gameState.version,
+        state: gameState.state,
+        board: gameState.board,
+      }];
+    }
     if (query.startsWith('SELECT status, host_account_id FROM games WHERE id = $1 FOR UPDATE')) {
       return state.games.filter(game => game.id === values[0]).map(game => ({ status: game.status, host_account_id: game.host_account_id }));
     }
