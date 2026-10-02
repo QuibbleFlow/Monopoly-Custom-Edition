@@ -8,12 +8,14 @@
   const requestTimeout = deps.setTimeout || root.setTimeout?.bind(root) || setTimeout;
   const clearRequestTimeout = deps.clearTimeout || root.clearTimeout?.bind(root) || clearTimeout;
   const stateListeners = new Set();
-  const pollInterval = deps.pollInterval || 500;
+  const pollInterval = deps.pollInterval || 350;
   let requestCounter = 0;
   let pollingTimer = null;
   let pollingGameId = null;
   let pollingInFlight = false;
   let generation = 0;
+  let unchangedPolls = 0;
+  let consecutivePollFailures = 0;
 
   const manager = {
     gameId: null,
@@ -153,14 +155,32 @@
           return;
         }
         pollingInFlight = true;
+        let nextDelay = pollInterval;
         try {
-          await this.fetchLatest(gameId, { generation: pollGeneration });
+          const result = await this.fetchLatest(gameId, { generation: pollGeneration });
+          consecutivePollFailures = 0;
+          if (result?.unchanged) {
+            unchangedPolls += 1;
+            // Stay responsive without hammering the connection when the
+            // board is idle. Changed state snaps back to a short catch-up
+            // interval immediately.
+            nextDelay = unchangedPolls >= 4 ? 450 : 250;
+          } else {
+            unchangedPolls = 0;
+            nextDelay = 220;
+          }
         } catch (error) {
+          consecutivePollFailures += 1;
+          unchangedPolls = 0;
+          // During a connection hiccup, back off instead of piling more work
+          // onto an already struggling route. The delay is capped so recovery
+          // is still quick.
+          nextDelay = Math.min(2200, pollInterval * (2 ** Math.min(consecutivePollFailures, 3)));
           if (deps.onPollError) deps.onPollError(error);
           else if (root.console) root.console.warn('Authoritative sync poll failed:', error);
         } finally {
           pollingInFlight = false;
-          schedule(pollInterval);
+          schedule(nextDelay);
         }
       };
       this.pollNow = () => schedule(0);
@@ -183,6 +203,8 @@
       generation += 1;
       if (pollingTimer) clearRequestTimeout(pollingTimer);
       pollingTimer = null;
+      unchangedPolls = 0;
+      consecutivePollFailures = 0;
       if (this.visibilityHandler && root.document) root.document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
       this.pollNow = null;
