@@ -68,6 +68,7 @@ test('four invited accounts start, pause, return to original seats, resume the s
   assert.equal(db.state.games[0].id, created.gameId);
   assert.equal(db.state.states[0].version, 2);
 
+  for (const inviteeAccountId of ids.slice(1,4)) await sendGameInvitation({ account:{id:ids[0]}, gameId:created.gameId, inviteeAccountId, db });
   for (const returningId of [ids[0], ids[1], ids[3]]) {
     const returned = await joinGame({ account: { id: returningId }, gameId: created.gameId, db });
     assert.equal(returned.status, 'PAUSED');
@@ -80,14 +81,18 @@ test('four invited accounts start, pause, return to original seats, resume the s
   await joinGame({ account: { id: ids[2] }, gameId: created.gameId, db });
   const resumed = await resumeGame({ account: { id: ids[0] }, gameId: created.gameId, db });
   assert.equal(resumed.gameId, created.gameId);
-  assert.equal(resumed.version, 2);
-  assert.deepEqual(resumed.state, authoritativeSnapshot);
+  assert.equal(resumed.version, 3);
+  const resumedCore=engine.cloneState(resumed.state), originalCore=engine.cloneState(authoritativeSnapshot);
+  delete resumedCore.connections; delete originalCore.connections;
+  assert.ok(resumedCore.tradeTimerEnd >= originalCore.tradeTimerEnd);
+  delete resumedCore.tradeTimerEnd; delete originalCore.tradeTimerEnd;
+  assert.deepEqual(resumedCore, originalCore);
   assert.deepEqual(resumed.players.map(player => player.seatIndex), [0, 1, 2, 3]);
 
   const clientStates = await Promise.all(ids.slice(0, 4).map(accountId =>
     getGameState({ account: { id: accountId }, gameId: created.gameId, db })
   ));
-  assert.ok(clientStates.every(state => state.status === 'ACTIVE' && state.version === 2));
+  assert.ok(clientStates.every(state => state.status === 'ACTIVE' && state.version === 3));
   assert.ok(clientStates.every(state => JSON.stringify(state.state) === JSON.stringify(clientStates[0].state)));
 
   const finalState = engine.deserializeState(db.state.states[0].state);

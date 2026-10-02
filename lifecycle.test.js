@@ -76,6 +76,13 @@ async function createActiveGame() {
   return { db, gameId: created.gameId };
 }
 
+function inviteReturningGuests(db, gameId) {
+  for (const player of db.state.players.filter(player => player.game_id === gameId)) {
+    db.state.invitations.push({ id:`return-${player.account_id}`, game_id:gameId, invitee_account_id:player.account_id, status:'accepted' });
+  }
+}
+function coreState(state) { const copy=engine.cloneState(state); delete copy.connections; return copy; }
+
 function editStoredGameState(db, edit) {
   const state = engine.deserializeState(db.state.states[0].state);
   edit(state);
@@ -271,6 +278,7 @@ test('paused matches require every original account and resume the same state, v
   assert.equal(stillMissing.error.code, 'PLAYERS_MISSING');
 
   await joinGame({ account: { id: 'account-a' }, gameId, db });
+  inviteReturningGuests(db, gameId);
   const playerReturned = await joinGame({ account: { id: 'account-b' }, gameId, db });
   assert.equal(playerReturned.players.map(player => player.accountId).join(','), 'account-a,account-b');
   assert.deepEqual(playerReturned.players.map(player => player.seatIndex), [0, 1]);
@@ -281,8 +289,8 @@ test('paused matches require every original account and resume the same state, v
   assert.equal(resumed.ok, true);
   assert.equal(resumed.gameId, gameId);
   assert.equal(resumed.status, 'ACTIVE');
-  assert.equal(resumed.version, 1);
-  assert.deepEqual(resumed.state, originalState);
+  assert.equal(resumed.version, 2);
+  assert.deepEqual(coreState(resumed.state), coreState(originalState));
   assert.equal(db.state.games[0].status, 'ACTIVE');
   assert.deepEqual(db.state.players.map(player => player.seat_index), [0, 1]);
 });
@@ -1030,13 +1038,14 @@ test('avatars enter new matches and saves, refresh on actions, and disappear aft
   await pauseGame({ account: { id: 'account-a' }, gameId: created.gameId, expectedVersion: 1, db });
   const savedPlayers = typeof db.state.saves[0].players === 'string' ? JSON.parse(db.state.saves[0].players) : db.state.saves[0].players;
   assert.equal(savedPlayers[0].avatarUrl, 'https://example.com/alice.png');
+  inviteReturningGuests(db, created.gameId);
   await joinGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
   await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
   await resumeGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
   editStoredGameState(db, state => { state.turnOrder = [0, 1]; state.current = 0; });
   db.state.accounts['account-a'].avatar_url = 'https://example.com/new.png';
   db.state.accounts['account-b'].avatar_url = null;
-  const result = await executeGameAction({ account: { id: 'account-a' }, gameId: created.gameId, action: { type: 'ROLL_DICE' }, version: 1, requestId: 'avatar-refresh', sql: db, random: () => 0 });
+  const result = await executeGameAction({ account: { id: 'account-a' }, gameId: created.gameId, action: { type: 'ROLL_DICE' }, version: 2, requestId: 'avatar-refresh', sql: db, random: () => 0 });
   assert.equal(result.ok, true);
   assert.equal(result.state.players[0].avatarUrl, 'https://example.com/new.png');
   assert.equal(result.state.players[1].avatarUrl, null);
@@ -1061,9 +1070,10 @@ test('first Save & Quit creates a player-named save and later pauses reuse it wi
   assert.equal(engine.deserializeState(db.state.saves[0].state).players[1].money, 1234);
   assert.equal(engine.deserializeState(db.state.saves[0].state).boardNames[0], 'Custom Start');
   db.state.saves[0].name = 'My chosen name';
+  inviteReturningGuests(db, created.gameId);
   for (const id of ['account-a', 'account-b', 'account-c']) await joinGame({ account: { id }, gameId: created.gameId, db });
   await resumeGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
-  const again = await pauseGame({ account: { id: 'account-a' }, gameId: created.gameId, expectedVersion: 1, db });
+  const again = await pauseGame({ account: { id: 'account-a' }, gameId: created.gameId, expectedVersion: 2, db });
   assert.equal(again.ok, true);
   assert.equal(again.saveId, paused.saveId);
   assert.equal(db.state.saves.length, 1);
@@ -1079,9 +1089,10 @@ test('long player lists produce a valid save name and generic legacy save names 
   assert.ok(db.state.saves[0].name.length <= 80);
   assert.ok(db.state.saves[0].name.startsWith('(') && db.state.saves[0].name.endsWith(')'));
   db.state.saves[0].name = 'Server game';
+  inviteReturningGuests(db, gameId);
   for (const id of ['account-a', 'account-b']) await joinGame({ account: { id }, gameId, db });
   await resumeGame({ account: { id: 'account-a' }, gameId, db });
-  await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 1, db });
+  await pauseGame({ account: { id: 'account-a' }, gameId, expectedVersion: 2, db });
   assert.notEqual(db.state.saves[0].name, 'Server game');
   assert.equal(db.state.saves.length, 1);
 });

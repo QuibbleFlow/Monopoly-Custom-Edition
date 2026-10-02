@@ -19,6 +19,7 @@ const routes = {
     item: require('../api-handlers/friends/[id].js'),
   },
   game: {
+    connection: require('../api-handlers/game/connection.js'),
     action: require('../api-handlers/game/action.js'),
     create: require('../api-handlers/game/create.js'),
     delete: require('../api-handlers/game/delete.js'),

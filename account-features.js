@@ -8,8 +8,20 @@ let accountNotificationPollInFlight = false;
 const seenFriendRequestNotifications = new Set();
 const seenGameInvitationNotifications = new Set();
 let cornerMenu = null;
+let friendProfileId = null;
 let cornerInviteGameId = '';
 let cornerSocialActionPending = false;
+let socialSnapshotPromise = null;
+let socialSnapshotCache = null;
+let socialSnapshotAt = 0;
+function fetchSocialSnapshot(force = false) {
+  if (socialSnapshotPromise) return socialSnapshotPromise;
+  if (!force && socialSnapshotCache && Date.now() - socialSnapshotAt < 1200) return Promise.resolve(socialSnapshotCache);
+  socialSnapshotPromise = accountRequest('/api/friends/snapshot').then(result => {
+    socialSnapshotCache = result; socialSnapshotAt = Date.now(); return result;
+  }).finally(() => { socialSnapshotPromise = null; });
+  return socialSnapshotPromise;
+}
 
 function ensureCornerMenus() {
   let root = document.getElementById('cornerAccountMenus');
@@ -46,6 +58,7 @@ function ensureCornerMenus() {
 function closeCornerMenu(restoreFocus = true) {
   const previous = cornerMenu;
   cornerMenu = null;
+  friendProfileId = null;
   clearInterval(friendsRefreshTimer);
   friendsRefreshTimer = null;
   const dialog = document.getElementById('cornerAccountDialog');
@@ -106,8 +119,8 @@ document.addEventListener('keydown', event => {
 });
 
 function cornerInviteGames() {
-  const games = backendMyGames.filter(item => item.hostAccountId === accountUser?.id && item.status === 'WAITING' && !item.resumeSaveId);
-  if (backendLobby?.game?.hostAccountId === accountUser?.id && backendLobby.game.status === 'WAITING' && !backendLobby.game.resumeSaveId && !games.some(item => (item.gameId || item.id) === backendLobby.gameId)) {
+  const games = backendMyGames.filter(item => item.hostAccountId === accountUser?.id && ['WAITING', 'PAUSED'].includes(item.status));
+  if (backendLobby?.game?.hostAccountId === accountUser?.id && ['WAITING', 'PAUSED'].includes(backendLobby.game.status) && !games.some(item => (item.gameId || item.id) === backendLobby.gameId)) {
     games.unshift({ ...backendLobby.game, gameId: backendLobby.gameId });
   }
   return games;
@@ -119,6 +132,7 @@ async function cornerInviteFriend(friendId) {
   renderFriendsScreen();
   try {
     await backendGameRequest('/api/game/invitations', { method: 'POST', body: JSON.stringify({ gameId: cornerInviteGameId, inviteeAccountId: friendId }) });
+    socialSnapshotCache = null;
     await loadFriendsScreen();
     friendsScreenState.status = 'Invitation sent.';
   } catch (error) { friendsScreenState.status = error.message; }
@@ -136,14 +150,14 @@ async function cornerJoinFriend(friendId) {
 async function cornerRespondToInvitation(id, action) {
   if (cornerSocialActionPending) return;
   if (action === 'accept') {
-    if (document.getElementById('plane')) return;
-    closeCornerMenu(false);
-    await backendRespondToInvitation(id, action);
+    if (await backendRespondToInvitation(id, action)) closeCornerMenu(false);
+    else { friendsScreenState.status = backendSocialError; renderFriendsScreen(); }
     return;
   }
   cornerSocialActionPending = true;
   try {
     await backendGameRequest(`/api/game/invitations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action }) });
+    socialSnapshotCache = null;
     await loadFriendsScreen();
   } catch (error) { friendsScreenState.status = error.message; }
   finally { cornerSocialActionPending = false; renderFriendsScreen(); }
@@ -166,6 +180,7 @@ function stopAccountPresence() {
   accountPresenceTimer = null;
   accountNotificationTimer = null;
   accountNotificationPollInFlight = false;
+  socialSnapshotCache = null;
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -238,6 +253,7 @@ function showAccountNotification({ key, title, message, actions = [] }) {
           await action.run();
           dismissAccountNotification(key);
         } catch (error) {
+          body.textContent = error.message;
           Array.from(actionRow.querySelectorAll('button')).forEach(item => { item.disabled = false; });
         }
       });
@@ -254,7 +270,7 @@ async function pollAccountNotifications() {
   if (!accountUser || accountNotificationPollInFlight || document.visibilityState === 'hidden') return;
   accountNotificationPollInFlight = true;
   try {
-    const social = await accountRequest('/api/friends/snapshot');
+    const social = await fetchSocialSnapshot();
     const friends = Array.isArray(social.friends) ? social.friends : [];
     const requests = Array.isArray(social.requests) ? social.requests : [];
     const invitations = Array.isArray(social.invitations) ? social.invitations : [];
@@ -287,23 +303,25 @@ async function pollAccountNotifications() {
         title: 'Friend request',
         message: `${request.username} sent you a friend request.`,
         actions: [
-          { label: 'Accept', primary: true, run: () => decideFriendRequest(request.id, 'accept') },
-          { label: 'Decline', run: () => decideFriendRequest(request.id, 'decline') },
+          { label: 'Accept', primary: true, run: async () => { if (!await decideFriendRequest(request.id, 'accept')) throw new Error(friendsScreenState.status); } },
+          { label: 'Decline', run: async () => { if (!await decideFriendRequest(request.id, 'decline')) throw new Error(friendsScreenState.status); } },
         ],
       });
     }
 
     for (const invitation of invitations.filter(item => item.direction === 'incoming')) {
       const key = 'game:' + invitation.invitationId;
-      if (seenGameInvitationNotifications.has(key)) continue;
-      seenGameInvitationNotifications.add(key);
+      const delivery = key + ':' + (invitation.createdAt || '');
+      if (seenGameInvitationNotifications.has(delivery)) continue;
+      seenGameInvitationNotifications.add(delivery);
+      dismissAccountNotification(key);
       showAccountNotification({
         key,
         title: 'Game invitation',
-        message: `${invitation.hostUsername} invited you to join a match (${Number(invitation.playerCount)}/8 players).`,
+        message: `${invitation.hostUsername} invited you to ${invitation.gameName || 'a match'} · ${invitation.boardName || 'Classic board'}.`,
         actions: [
-          { label: 'Accept', primary: true, run: () => backendRespondToInvitation(invitation.invitationId, 'accept') },
-          { label: 'Decline', run: () => backendRespondToInvitation(invitation.invitationId, 'decline') },
+          { label: 'Accept', primary: true, run: async () => { if (!await backendRespondToInvitation(invitation.invitationId, 'accept')) throw new Error(backendSocialError); } },
+          { label: 'Decline', run: async () => { if (!await backendRespondToInvitation(invitation.invitationId, 'decline')) throw new Error(backendSocialError); } },
         ],
       });
     }
@@ -326,17 +344,17 @@ function openFriendsScreen() {
 
 function closeFriendsScreen() { closeCornerMenu(); }
 
-async function loadFriendsScreen() {
+async function loadFriendsScreen({ preserveStatus = false } = {}) {
   const searchInput = document.getElementById('friendSearchInput');
   if (searchInput) friendsScreenState.query = searchInput.value;
 
   try {
-    const social = await accountRequest('/api/friends/snapshot');
+    const social = await fetchSocialSnapshot();
     friendsScreenState.friends = social.friends || [];
     friendsScreenState.requests = social.requests || [];
     if (typeof backendFriends !== 'undefined') backendFriends = social.friends || [];
     if (typeof backendGameInvitations !== 'undefined') backendGameInvitations = social.invitations || [];
-    friendsScreenState.status = '';
+    if (!preserveStatus) friendsScreenState.status = '';
   } catch (error) {
     friendsScreenState.status = error.message;
   }
@@ -352,6 +370,7 @@ function setCornerSection(id, markup) {
 
 function renderFriendsScreen() {
   if (cornerMenu !== 'friends') return;
+  if (friendProfileId) { viewFriendProfile(friendProfileId); return; }
   const content = document.getElementById('cornerAccountContent');
   if (!accountUser) {
     content.innerHTML = `<p class="muted">Sign in to add friends and join their games.</p><button class="btn" type="button" onclick="toggleCornerMenu('profile')">Sign in</button>`;
@@ -359,12 +378,11 @@ function renderFriendsScreen() {
   }
   if (!document.getElementById('cornerFriendsContent')) {
     content.innerHTML = `<div id="cornerFriendsContent">
-      <div id="cornerFriendInvites"></div>
       <section class="panel acc-green"><h2>Friends</h2><div id="cornerInviteTarget"></div><div id="cornerFriendRows" class="social-list"></div></section>
-      <section class="panel acc-blue"><h2>Add a friend</h2><form class="corner-friend-search" onsubmit="searchFriendAccounts(event)">
+      <details class="panel acc-blue"><summary>Add a friend</summary><form class="corner-friend-search" onsubmit="searchFriendAccounts(event)">
         <input id="friendSearchInput" type="search" name="query" minlength="2" maxlength="24" value="${esc(friendsScreenState.query)}" placeholder="Username" autocomplete="off" oninput="friendsScreenState.query=this.value" required>
-        <button class="btn" type="submit">Search</button></form><div id="cornerFriendResults" class="social-list"></div></section>
-      <section class="panel acc-orange"><h2>Friend requests</h2><div id="cornerFriendRequests" class="social-list"></div><details><summary>Sent requests</summary><div id="cornerSentRequests" class="social-list"></div></details></section>
+        <button class="btn" type="submit">Search</button></form><div id="cornerFriendResults" class="social-list"></div></details>
+      <section class="panel acc-orange"><h2>Requests</h2><div id="cornerFriendInvites"></div><div id="cornerFriendRequests" class="social-list"></div><details><summary>Sent requests</summary><div id="cornerSentRequests" class="social-list"></div></details></section>
       <p id="cornerFriendsStatus" class="account-status" role="status"></p>
     </div>`;
   }
@@ -380,21 +398,24 @@ function renderFriendsScreen() {
   const incoming = friendsScreenState.requests.filter(request => request.direction === 'incoming');
   const outgoing = friendsScreenState.requests.filter(request => request.direction === 'outgoing');
   const playing = !!document.getElementById('plane');
-  const friendRows = friendsScreenState.friends.map(friend => {
+  const rowForFriend = friend => {
     const invited = backendGameInvitations.some(item => item.direction === 'outgoing' && item.gameId === cornerInviteGameId && item.inviteeUsername === friend.username);
-    const member = backendLobby?.gameId === cornerInviteGameId && backendLobby.players?.some(item => (item.accountId || item.account_id) === friend.id);
+    const member = backendLobby?.gameId === cornerInviteGameId && backendLobby.players?.some(item => (item.accountId || item.account_id) === friend.id && (!['PAUSED'].includes(backendLobby.game?.status) && !backendLobby.game?.resumeSaveId || item.returnedAt));
     const invitation = backendGameInvitations.find(item => item.direction === 'incoming' && item.hostUsername === friend.username);
-    const joinId = friend.joinableGame?.gameId || invitation?.gameId;
+    const joinId = friend.online && (friend.joinableGame?.gameId || invitation?.gameId);
     const joinAction = friend.joinableGame?.gameId ? `cornerJoinFriend('${esc(friend.id)}')` : invitation ? `cornerRespondToInvitation('${esc(invitation.invitationId)}','accept')` : '';
-    return `<div class="social-row corner-friend-row">
-      ${socialAvatar(friend)}<span class="social-name">${esc(friend.username)}<small class="friend-presence ${friend.online ? 'online' : ''}">${friend.online ? 'Online' : 'Offline'}</small></span>
-      <details class="corner-friend-options"><summary aria-label="Options for ${esc(friend.username)}">⋮</summary><button class="btn alt" type="button" onclick="removeFriendAccount('${esc(friend.id)}')">Remove friend</button></details>
-      <div class="corner-friend-actions">
-        <button class="btn alt" type="button" onclick="${joinAction}" ${!joinId || playing || cornerSocialActionPending ? 'disabled' : ''} title="${playing ? 'Finish or leave your current match first' : joinId ? 'Join this friend’s waiting match' : 'No available match'}">Join game</button>
-        <button class="btn" type="button" onclick="cornerInviteFriend('${esc(friend.id)}')" ${!cornerInviteGameId || invited || member || cornerSocialActionPending ? 'disabled' : ''}>${member ? 'In your game' : invited ? 'Invited' : 'Invite to game'}</button>
-      </div>
-    </div>`;
-  }).join('') || '<p class="muted">Your friend list is empty.</p>';
+    const status = !friend.online ? 'Offline' : friend.currentGame?.status === 'ACTIVE' ? 'In Game' : friend.currentGame ? 'In lobby' : 'Online';
+    return `<div class="social-row corner-friend-row">${socialAvatar(friend)}<span class="social-name">${esc(friend.username)}<small class="friend-presence ${friend.online ? 'online' : ''}">${status}${friend.currentGame ? ` · ${esc(friend.currentGame.name || 'Match')}` : ''}</small></span>
+      <details class="corner-friend-options"><summary aria-label="Options for ${esc(friend.username)}">⋮</summary><button class="btn alt" onclick="viewFriendProfile('${esc(friend.id)}')">View profile</button><button class="btn alt danger" onclick="removeFriendAccount('${esc(friend.id)}')" ${cornerSocialActionPending ? 'disabled' : ''}>Remove friend</button></details>
+      <div class="corner-friend-actions">${joinId && !playing ? `<button class="btn" onclick="${joinAction}" ${cornerSocialActionPending ? 'disabled' : ''}>Join Game</button>` : ''}
+      ${friend.online && cornerInviteGameId && !member && !joinId ? `<button class="btn" onclick="cornerInviteFriend('${esc(friend.id)}')" ${invited || cornerSocialActionPending ? 'disabled' : ''}>${invited ? 'Invited' : 'Invite to Game'}</button>` : member ? '<span class="tag">In your game</span>' : ''}</div></div>`;
+  };
+  const groups = [
+    ['Online', friendsScreenState.friends.filter(friend => friend.online && !friend.currentGame)],
+    ['In Game', friendsScreenState.friends.filter(friend => friend.online && friend.currentGame)],
+    ['Offline', friendsScreenState.friends.filter(friend => !friend.online)],
+  ];
+  const friendRows = groups.filter(([, items]) => items.length).map(([name, items]) => `<section class="friend-group"><h3>${name} · ${items.length}</h3>${items.map(rowForFriend).join('')}</section>`).join('') || '<p class="muted">Add a friend to play together.</p>';
   const requestRows = incoming.map(request => `<div class="social-row">
     ${socialAvatar({ username: request.username, avatar_url: request.avatar_url })}
     <span class="social-name">${esc(request.username)}</span><span class="tag">wants to connect</span>
@@ -415,7 +436,7 @@ function renderFriendsScreen() {
       ${action}
     </div>`;
   }).join('') || (friendsScreenState.query ? '<p class="muted">No matching accounts.</p>' : '');
-  const invitationRows = backendGameInvitations.filter(item => item.direction === 'incoming').map(item => `<div class="social-row"><span class="social-name">${esc(item.hostUsername)} invited you<span class="friend-presence">${Number(item.playerCount)} / 8 players</span></span><div class="corner-friend-actions"><button class="btn" type="button" onclick="cornerRespondToInvitation('${esc(item.invitationId)}','accept')" ${playing || cornerSocialActionPending ? 'disabled' : ''}>Join game</button><button class="btn alt" type="button" onclick="cornerRespondToInvitation('${esc(item.invitationId)}','decline')" ${cornerSocialActionPending ? 'disabled' : ''}>Decline</button></div></div>`).join('');
+  const invitationRows = backendGameInvitations.filter(item => item.direction === 'incoming').map(item => `<div class="social-row"><span class="social-name">${esc(item.hostUsername)} invited you<span class="friend-presence">${esc(item.boardName || 'Classic board')} · ${esc(item.gameName || 'Match')}</span></span><div class="corner-friend-actions"><button class="btn" type="button" onclick="cornerRespondToInvitation('${esc(item.invitationId)}','accept')" ${cornerSocialActionPending ? 'disabled' : ''}>Accept</button><button class="btn alt" type="button" onclick="cornerRespondToInvitation('${esc(item.invitationId)}','decline')" ${cornerSocialActionPending ? 'disabled' : ''}>Decline</button></div></div>`).join('');
   setCornerSection('cornerFriendInvites', invitationRows ? `<section class="panel acc-yellow"><h2>Game invitations</h2><div class="social-list">${invitationRows}</div></section>` : '');
   setCornerSection('cornerFriendRows', friendRows);
   setCornerSection('cornerFriendRequests', requestRows);
@@ -452,30 +473,50 @@ async function sendFriendRequest(username) {
           ? 'You are already friends.'
           : `Request sent to ${username}.`);
   } catch (error) { friendsScreenState.status = error.message; }
+  socialSnapshotCache = null;
   friendsScreenState.query = '';
   friendsScreenState.results = [];
-  await loadFriendsScreen();
+  await loadFriendsScreen({ preserveStatus: true });
   pollAccountNotifications();
 }
 
 async function decideFriendRequest(id, action) {
+  if (cornerSocialActionPending) return false;
+  cornerSocialActionPending = true;
+  renderFriendsScreen();
+  let succeeded = false;
   try {
     await accountRequest(`/api/friends/requests/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action }) });
     friendsScreenState.status = action === 'accept' ? 'Friend request accepted.' : 'Friend request declined.';
+    succeeded = true;
   } catch (error) { friendsScreenState.status = error.message; }
-  dismissAccountNotification('friend:' + id);
+  cornerSocialActionPending = false;
+  socialSnapshotCache = null;
+  if (succeeded) dismissAccountNotification('friend:' + id);
   friendsScreenState.results = [];
-  await loadFriendsScreen();
+  await loadFriendsScreen({ preserveStatus: true });
   pollAccountNotifications();
+  return succeeded;
 }
 
 async function removeFriendAccount(id) {
-  if (!confirm('Remove this friend?')) return;
+  if (cornerSocialActionPending) return;
+  if (!await appConfirm('Remove this person from your friends?', 'Remove friend?', 'Remove')) return;
+  cornerSocialActionPending = true;
   try {
     await accountRequest(`/api/friends/${encodeURIComponent(id)}`, { method: 'DELETE' });
     friendsScreenState.status = 'Friend removed.';
   } catch (error) { friendsScreenState.status = error.message; }
-  await loadFriendsScreen();
+  socialSnapshotCache = null;
+  cornerSocialActionPending = false;
+  await loadFriendsScreen({ preserveStatus: true });
+}
+
+function viewFriendProfile(id) {
+  friendProfileId = id;
+  const friend = friendsScreenState.friends.find(item => item.id === id);
+  if (!friend) return;
+  document.getElementById('cornerAccountContent').innerHTML = `<div class="friend-profile">${socialAvatar(friend)}<div><h3>${esc(friend.username)}</h3><p class="muted">${friend.online ? friend.currentGame ? 'In Game' : 'Online' : 'Offline'}</p></div></div>${friend.currentGame ? `<p>${esc(friend.currentGame.name || 'Match')}</p>` : ''}<button class="btn alt" onclick="friendProfileId=null;renderFriendsScreen()">Back to friends</button>`;
 }
 
 function openBoardsScreen(selectingForHost = false) {

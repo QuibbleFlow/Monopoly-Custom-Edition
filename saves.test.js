@@ -3,7 +3,7 @@ const test = require('node:test');
 const engine = require('./game-engine.js');
 const boardData = require('./game-board.js');
 
-const { createGame, joinGame, startGame } = require('./api-handlers/game/lifecycle.js');
+const { createGame, joinGame, startGame, pauseGame } = require('./api-handlers/game/lifecycle.js');
 const { executeGameAction } = require('./api-handlers/game/action.js');
 const { saveGame, listSaves, loadGame, resumeGame } = require('./api-handlers/game/saves.js');
 const { getFinalResults } = require('./lib/game-results.js');
@@ -91,7 +91,9 @@ test('saveGame captures the exact authoritative snapshot and preserves exact ori
     state.players[0].money = 999;
     state.owners[1] = 0;
   });
-  const result = await saveGame({ account: { id: 'account-a' }, gameId, name: 'Friday night', db });
+  const pause = await pauseGame({ account: { id: 'account-a' }, gameId, db });
+  db.state.saves[0].name = 'Friday night';
+  const result = { ok:pause.ok, save:(await listSaves({account:{id:'account-a'},db})).saves[0] };
   assert.equal(result.ok, true);
   assert.equal(result.save.name, 'Friday night');
   assert.equal(result.save.status, 'SAVED');
@@ -110,7 +112,8 @@ test('listSaves requires authentication and never returns another account\'s sav
   assert.equal(unauth.error.code, 'UNAUTHENTICATED');
 
   const { db, gameId } = await createActiveGame();
-  await saveGame({ account: { id: 'account-a' }, gameId, name: 'Save A', db });
+  await pauseGame({ account: { id: 'account-a' }, gameId, db });
+  db.state.saves[0].name = 'Save A';
 
   const ownerList = await listSaves({ account: { id: 'account-a' }, db });
   // A match keeps one canonical save slot. Saving again updates that slot
@@ -136,7 +139,9 @@ async function saveAndLoad() {
     state.current = 1;
     state.turnOrder = [1, 0];
   });
-  const saved = await saveGame({ account: { id: 'account-a' }, gameId, name: 'Resume me', db });
+  await pauseGame({ account:{id:'account-a'}, gameId, db });
+  db.state.saves[0].name='Resume me';
+  const saved={save:(await listSaves({account:{id:'account-a'},db})).saves[0]};
 
   // These load/resume tests exercise recovery from the save snapshot itself.
   // Simulate the original live match no longer being available. When it is
@@ -148,17 +153,19 @@ async function saveAndLoad() {
   db.state.actionRequests = db.state.actionRequests.filter(request => request.game_id !== gameId);
 
   const loaded = await loadGame({ account: { id: 'account-a' }, saveId: saved.save.saveId, db });
+  db.state.invitations.push({id:'return-b',game_id:loaded.gameId,invitee_account_id:'account-b',status:'accepted'});
   return { db, saved, loaded };
 }
 
 test('loading the save for a still-live match reopens the authoritative match instead of cloning it', async () => {
   const { db, gameId } = await createActiveGame();
-  const saved = await saveGame({ account: { id: 'account-a' }, gameId, name: 'Live match', db });
+  await pauseGame({ account:{id:'account-a'}, gameId, db });
+  const saved={save:(await listSaves({account:{id:'account-a'},db})).saves[0]};
 
   const loaded = await loadGame({ account: { id: 'account-a' }, saveId: saved.save.saveId, db });
   assert.equal(loaded.ok, true);
   assert.equal(loaded.gameId, gameId);
-  assert.equal(loaded.status, 'ACTIVE');
+  assert.equal(loaded.status, 'PAUSED');
   assert.equal(loaded.reusedExistingGame, true);
   assert.equal(db.state.games.filter(game => game.id === gameId).length, 1);
 });

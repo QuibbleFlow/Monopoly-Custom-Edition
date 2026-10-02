@@ -8,6 +8,7 @@
   const requestTimeout = deps.setTimeout || root.setTimeout?.bind(root) || setTimeout;
   const clearRequestTimeout = deps.clearTimeout || root.clearTimeout?.bind(root) || clearTimeout;
   const stateListeners = new Set();
+  const connectionListeners = new Set();
   const pollInterval = deps.pollInterval || 350;
   let requestCounter = 0;
   let pollingTimer = null;
@@ -24,6 +25,10 @@
     state: null,
     lastEvents: [],
     active: false,
+    presence: null,
+    hostAccountId: null,
+    connectionStatus: 'connected',
+    connection: 'connected',
 
     getAuthoritativeState() {
       return {
@@ -32,6 +37,10 @@
         status: this.status,
         state: this.state,
         events: this.lastEvents,
+        presence: this.presence,
+        hostAccountId: this.hostAccountId,
+        connectionStatus: this.connectionStatus,
+        connection: this.connection,
       };
     },
 
@@ -39,6 +48,16 @@
       if (typeof listener !== 'function') return () => {};
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
+    },
+    subscribeConnection(listener) {
+      connectionListeners.add(listener);
+      return () => connectionListeners.delete(listener);
+    },
+    async updateConnection(status, connection = this.connection) {
+      if (status === this.connectionStatus && connection === this.connection) return;
+      this.connectionStatus = status;
+      this.connection = connection;
+      await Promise.all([...connectionListeners].map(listener => listener(this.getAuthoritativeState())));
     },
 
     async notify() {
@@ -68,6 +87,8 @@
       this.version = Math.max(this.version, nextVersion);
       this.status = payload.status || this.status;
       this.state = payload.state || this.state;
+      this.presence = payload.presence || this.presence;
+      this.hostAccountId = payload.hostAccountId || this.presence?.hostAccountId || this.hostAccountId;
       this.lastEvents = Array.isArray(payload.events) ? payload.events : [];
       await this.notify();
       if (this.status === 'FINISHED') this.stopPolling();
@@ -104,6 +125,10 @@
       this.status = null;
       this.state = null;
       this.lastEvents = [];
+      this.presence = null;
+      this.hostAccountId = null;
+      this.connection = 'connected';
+      this.connectionStatus = 'connected';
       return this.notify();
     },
 
@@ -130,6 +155,8 @@
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw makeError(result, response.status, 'Could not load the authoritative game state.');
       if (requestGeneration !== generation || (this.gameId && gameId !== this.gameId)) return null;
+      await this.updateConnection('connected', result.connection || 'connected');
+      if (requestGeneration !== generation) return null;
       if (!result.unchanged) await this.setAuthoritativeState(result);
       return result;
     },
@@ -176,6 +203,9 @@
           // onto an already struggling route. The delay is capped so recovery
           // is still quick.
           nextDelay = Math.min(2200, pollInterval * (2 ** Math.min(consecutivePollFailures, 3)));
+          const failed = ['NOT_IN_GAME', 'GAME_NOT_FOUND', 'RECONNECT_EXPIRED'].includes(error.code) || error.status === 401;
+          await this.updateConnection(failed ? 'failed' : consecutivePollFailures >= 4 ? 'disconnected' : 'reconnecting');
+          if (failed) this.stopPolling();
           if (deps.onPollError) deps.onPollError(error);
           else if (root.console) root.console.warn('Authoritative sync poll failed:', error);
         } finally {
@@ -246,6 +276,8 @@
           status: result.status || 'ACTIVE',
           state: result.state,
           events: result.events || [],
+          presence: result.presence,
+          hostAccountId: result.hostAccountId,
         });
       }
       return { ...result, requestId };

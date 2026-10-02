@@ -87,7 +87,41 @@
     return bestIndex;
   }
 
+  let preferences = { mode: 'focus', sensitivity: 1.2, deadzone: .18 };
+  let runtime = null;
+  try {
+    const stored = JSON.parse(root.localStorage?.getItem('monopolyController') || '{}');
+    preferences = normalizePreferences(stored);
+  } catch (error) {}
+
+  function normalizePreferences(value = {}) {
+    return {
+      mode: value.mode === 'mouse' ? 'mouse' : 'focus',
+      sensitivity: Math.max(.4, Math.min(2.5, Number(value.sensitivity) || 1.2)),
+      deadzone: Math.max(.1, Math.min(.4, Number(value.deadzone) || .18)),
+    };
+  }
+
+  function configure(changes) {
+    preferences = normalizePreferences({ ...preferences, ...changes });
+    try { root.localStorage?.setItem('monopolyController', JSON.stringify(preferences)); } catch (error) {}
+    runtime?.preferencesChanged();
+  }
+
+  function advanceCursor(cursor, x, y, elapsed, width, height, prefs = preferences) {
+    const dt = Math.max(0, Math.min(.05, elapsed));
+    const length = Math.hypot(x, y);
+    const strength = Math.min(1, Math.max(0, (length - prefs.deadzone) / (1 - prefs.deadzone)));
+    const speed = Math.pow(strength, 1.65) * 1000 * prefs.sensitivity;
+    const smoothing = 1 - Math.exp(-18 * dt);
+    const vx = (cursor.vx || 0) + ((length ? x / length * speed : 0) - (cursor.vx || 0)) * smoothing;
+    const vy = (cursor.vy || 0) + ((length ? y / length * speed : 0) - (cursor.vy || 0)) * smoothing;
+    return { x: Math.max(2, Math.min(width - 2, cursor.x + vx * dt)),
+      y: Math.max(2, Math.min(height - 2, cursor.y + vy * dt)), vx, vy };
+  }
+
   function init() {
+    if (runtime) return runtime;
     if (!root || !root.document || !root.navigator || typeof root.navigator.getGamepads !== 'function') return;
 
     const doc = root.document;
@@ -102,6 +136,9 @@
     let lastControllerInputAt = 0;
     let keyboardState = null;
     let quickMenuOpen = false;
+    let cursor = { x: root.innerWidth / 2, y: root.innerHeight / 2, vx: 0, vy: 0 };
+    let lastFrameAt = null;
+    let hoveredElement = null;
 
     function addStyles() {
       if (doc.getElementById('controllerSupportStyles')) return;
@@ -122,7 +159,7 @@
           left: 50%;
           bottom: 10px;
           transform: translateX(-50%);
-          z-index: 500;
+          z-index: 525;
           max-width: calc(100vw - 20px);
           display: none;
           align-items: center;
@@ -139,7 +176,10 @@
           font-weight: 850;
           pointer-events: none;
         }
-        .controller-hud.connected { display: flex; }
+        body.controller-input .controller-hud.connected { display: flex; }
+        .controller-cursor { position:fixed;z-index:1100;pointer-events:none;width:20px;height:20px;border:3px solid #101a14;border-radius:50%;background:#ffd84d;box-shadow:0 0 0 2px #fff;transform:translate(-50%,-50%);display:none; }
+        body.controller-input .controller-cursor.enabled { display:block; }
+        .controller-hover { outline:3px solid #ffd84d !important;outline-offset:3px !important; }
         .controller-hud .pad-name {
           opacity: .78;
           margin-right: 3px;
@@ -197,8 +237,8 @@
           overflow: auto;
           border-radius: 18px;
           border: 2px solid rgba(255,255,255,.74);
-          background: #f7f1df;
-          color: #101a14;
+          background: var(--panel, #f7f1df);
+          color: var(--fg, #101a14);
           box-shadow: 0 20px 60px rgba(0,0,0,.48);
           padding: 18px;
         }
@@ -213,8 +253,8 @@
           min-height: 52px;
           border: 2px solid #142017;
           border-radius: 12px;
-          background: #fff;
-          color: #101a14;
+          background: var(--btn-alt, #fff);
+          color: var(--fg, #101a14);
           font: inherit;
           font-weight: 900;
           cursor: pointer;
@@ -224,8 +264,9 @@
         .controller-keyboard-preview {
           min-height: 58px;
           border-radius: 12px;
-          background:#fff;
-          border:2px solid #18251c;
+          background:var(--btn-alt, #fff);
+          color:var(--fg, #101a14);
+          border:2px solid var(--border, #18251c);
           display:flex;
           align-items:center;
           padding:10px 14px;
@@ -243,8 +284,8 @@
           min-height:46px;
           border:2px solid #18251c;
           border-radius:10px;
-          background:#fff;
-          color:#101a14;
+          background:var(--btn-alt, #fff);
+          color:var(--fg, #101a14);
           font:inherit;
           font-weight:900;
           cursor:pointer;
@@ -281,12 +322,12 @@
         return;
       }
       const gameHints = isGameScreen()
-        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.RT}</kbd> Main action</span><span><kbd>${labels.MENU}</kbd> Quick menu</span>`
+        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.RT}</kbd> Main action</span><span><kbd>${labels.MENU}</kbd> Game menu</span>`
         : '';
       hud.innerHTML = `<span class="pad-name">🎮 ${escapeHtml(shortControllerName(connectedId))}</span>
         <span><kbd>${labels.A}</kbd> Select</span>
         <span><kbd>${labels.B}</kbd> Back</span>
-        <span>✚ Navigate</span>
+        <span>${preferences.mode === 'mouse' ? 'Left stick: cursor · Right stick: scroll' : '✚ Navigate'}</span>
         ${gameHints}`;
       hud.classList.add('connected');
     }
@@ -377,6 +418,7 @@
     function setControllerInputMode() {
       lastControllerInputAt = Date.now();
       doc.body.classList.add('controller-input');
+      drawCursor();
     }
 
     function visible(el) {
@@ -392,10 +434,10 @@
       if (keyboard) return keyboard;
       const quick = doc.getElementById('controllerQuickMenu');
       if (quick) return quick;
-      const accountMenu = doc.getElementById('cornerAccountDialog');
-      if (accountMenu && visible(accountMenu)) return accountMenu;
       const scrims = Array.from(doc.querySelectorAll('.scrim')).filter(visible);
       if (scrims.length) return scrims[scrims.length - 1];
+      const accountMenu = doc.getElementById('cornerAccountDialog');
+      if (accountMenu && visible(accountMenu)) return accountMenu;
       return doc;
     }
 
@@ -543,6 +585,7 @@
         closeQuickMenu();
         return;
       }
+      if (doc.getElementById('gameMenuOverlay') && typeof root.closeGameMenu === 'function') { root.closeGameMenu(); return; }
       const accountMenu = doc.getElementById('cornerAccountDialog');
       if (accountMenu && visible(accountMenu) && typeof root.closeCornerMenu === 'function') {
         root.closeCornerMenu();
@@ -589,71 +632,78 @@
       root.setTimeout(() => ensureFocused(), 20);
     }
 
-    function openSaveQuitConfirm() {
-      const gameId = root.authoritativeGame && root.authoritativeGame.gameId;
-      const canDirectSave = gameId && typeof root.backendSaveAndQuitGame === 'function';
-      const overlay = doc.getElementById('controllerQuickMenu');
-      if (!overlay) return;
-      const panel = overlay.querySelector('.controller-panel');
-      if (!panel) return;
-      panel.innerHTML = '<h2>Save & Quit?</h2><p class="controller-sub">The match will be saved and paused. Every original player must return before it can continue.</p>';
-      const grid = doc.createElement('div');
-      grid.className = 'controller-grid';
-      const cancel = doc.createElement('button');
-      cancel.type = 'button';
-      cancel.className = 'controller-action';
-      cancel.textContent = 'Keep playing';
-      cancel.addEventListener('click', closeQuickMenu);
-      const confirm = doc.createElement('button');
-      confirm.type = 'button';
-      confirm.className = 'controller-action';
-      confirm.textContent = 'Save & Quit';
-      confirm.disabled = !canDirectSave;
-      confirm.addEventListener('click', () => {
-        closeQuickMenu();
-        if (canDirectSave) root.backendSaveAndQuitGame(gameId);
-      });
-      grid.append(cancel, confirm);
-      panel.appendChild(grid);
-      root.setTimeout(() => focusElement(cancel), 0);
-    }
-
     function openQuickMenu() {
       if (keyboardState) return;
-      if (quickMenuOpen) { closeQuickMenu(); return; }
-      quickMenuOpen = true;
-      const overlay = doc.createElement('div');
-      overlay.id = 'controllerQuickMenu';
-      overlay.className = 'controller-overlay';
+      if (isGameScreen() && typeof root.openGameMenu === 'function') root.openGameMenu();
+      else if (typeof root.openGameSettings === 'function') {
+        if (doc.getElementById('gameMenuOverlay')) root.closeGameMenu();
+        else root.openGameSettings();
+      }
+    }
 
-      const actions = [
-        { label: 'Resume', run: closeQuickMenu, enabled: true },
-        { label: 'Primary action', run: () => { closeQuickMenu(); quickAction('primary'); }, enabled: !!doc.querySelector('#dock .primary:not([disabled])') },
-        { label: 'Manage properties', run: () => { closeQuickMenu(); quickAction('manage'); }, enabled: !!buttonByText(['manage properties']) },
-        { label: 'View deeds', run: () => { closeQuickMenu(); quickAction('deeds'); }, enabled: !!buttonByText(['view deeds']) },
-        { label: 'Trade', run: () => { closeQuickMenu(); quickAction('trade'); }, enabled: !!buttonByText(['trade']) },
-        { label: 'Save & Quit', run: () => openSaveQuitConfirm(), enabled: !!buttonByText(['save & quit']) },
-      ];
+    function cursorElement() {
+      let element = doc.getElementById('controllerCursor');
+      if (!element) {
+        element = doc.createElement('div'); element.id = 'controllerCursor'; element.className = 'controller-cursor';
+        element.setAttribute('aria-hidden', 'true'); doc.body.appendChild(element);
+      }
+      return element;
+    }
 
-      const panel = doc.createElement('div');
-      panel.className = 'controller-panel';
-      panel.innerHTML = `<h2>🎮 Controller menu</h2><p class="controller-sub">${labels.A} select · ${labels.B} close · D-pad / left stick navigate</p>`;
-      const grid = doc.createElement('div');
-      grid.className = 'controller-grid';
-      actions.forEach(action => {
-        const button = doc.createElement('button');
-        button.className = 'controller-action';
-        button.type = 'button';
-        button.textContent = action.label;
-        button.disabled = !action.enabled;
-        button.addEventListener('click', action.run);
-        grid.appendChild(button);
-      });
-      panel.appendChild(grid);
-      overlay.appendChild(panel);
-      doc.body.appendChild(overlay);
-      root.setTimeout(() => ensureFocused(), 0);
-      haptic(.11, 35);
+    function drawCursor() {
+      const element = cursorElement();
+      element.classList.toggle('enabled', preferences.mode === 'mouse' && connectedIndex != null);
+      element.style.left = cursor.x + 'px'; element.style.top = cursor.y + 'px';
+    }
+
+    function pointerTarget() {
+      const target = doc.elementFromPoint(cursor.x, cursor.y);
+      const scope = activeScope();
+      return target && (scope === doc || scope.contains(target)) ? target : null;
+    }
+
+    function moveCursor(x, y, elapsed) {
+      cursor = advanceCursor(cursor, x, y, elapsed, root.innerWidth, root.innerHeight);
+      drawCursor();
+      const target = pointerTarget();
+      const selectable = target?.closest('button, input, select, textarea, summary, a[href], [role="button"]');
+      if (hoveredElement !== selectable) {
+        hoveredElement?.classList.remove('controller-hover');
+        hoveredElement = selectable;
+        hoveredElement?.classList.add('controller-hover');
+      }
+      target?.dispatchEvent(new root.PointerEvent('pointermove', { bubbles:true, clientX:cursor.x, clientY:cursor.y, pointerType:'mouse' }));
+    }
+
+    function clickCursor() {
+      const target = pointerTarget();
+      const element = target?.closest('button, input, select, textarea, summary, a[href], [role="button"]') || target;
+      if (!element || element.disabled) return;
+      if (element.matches('input[type="range"]')) {
+        const rect = element.getBoundingClientRect();
+        const min = Number(element.min || 0), max = Number(element.max || 100), step = Number(element.step || 1);
+        element.value = String(Math.max(min, Math.min(max, min + Math.round((cursor.x - rect.left) / rect.width * (max - min) / step) * step)));
+        element.dispatchEvent(new Event('input', { bubbles:true })); element.dispatchEvent(new Event('change', { bubbles:true }));
+      } else if (element.matches('select')) { focusElement(element); changeSelect(element, 1); }
+      else if (element.matches('textarea, input[type="text"], input[type="search"], input[type="number"], input[type="email"], input[type="password"]')) {
+        focusElement(element); openKeyboard(element);
+      } else {
+        element.dispatchEvent(new root.PointerEvent('pointerdown', { bubbles:true, clientX:cursor.x, clientY:cursor.y, pointerType:'mouse', button:0 }));
+        element.dispatchEvent(new root.PointerEvent('pointerup', { bubbles:true, clientX:cursor.x, clientY:cursor.y, pointerType:'mouse', button:0 }));
+        element.click();
+      }
+      haptic(.1, 30);
+    }
+
+    function scrollCursor(x, y, elapsed) {
+      let target = pointerTarget();
+      while (target && target !== doc.body) {
+        const style = root.getComputedStyle(target);
+        if (/(auto|scroll)/.test(style.overflowY) && target.scrollHeight > target.clientHeight) break;
+        target = target.parentElement;
+      }
+      const scrollable = target && target !== doc.body ? target : doc.scrollingElement;
+      scrollable?.scrollBy(x * 900 * elapsed, y * 900 * elapsed);
     }
 
     function keyboardCharacters(shifted, input = null) {
@@ -873,6 +923,8 @@
       }
 
       let used = false;
+      const elapsed = lastFrameAt == null ? 1 / 60 : Math.min(.05, (timestamp - lastFrameAt) / 1000);
+      lastFrameAt = timestamp;
       const x = pad.axes && Number.isFinite(pad.axes[0]) ? pad.axes[0] : 0;
       const y = pad.axes && Number.isFinite(pad.axes[1]) ? pad.axes[1] : 0;
       const rx = pad.axes && Number.isFinite(pad.axes[2]) ? pad.axes[2] : 0;
@@ -882,6 +934,16 @@
       const left = pressed(pad, STANDARD.LEFT) || x < -DEADZONE;
       const right = pressed(pad, STANDARD.RIGHT) || x > DEADZONE;
 
+      if (preferences.mode === 'mouse') {
+        const moving = Math.hypot(x, y) > preferences.deadzone;
+        if (moving || Math.hypot(cursor.vx, cursor.vy) > .1) { moveCursor(x, y, elapsed); used = moving; }
+        const scrollX = Math.abs(rx) > preferences.deadzone ? rx : 0;
+        const scrollY = Math.abs(ry) > preferences.deadzone ? ry : 0;
+        const triggerScroll = (pressed(pad, STANDARD.RT) ? 1 : 0) - (pressed(pad, STANDARD.LT) ? 1 : 0);
+        if (scrollX || scrollY || triggerScroll) { scrollCursor(scrollX, scrollY || triggerScroll, elapsed); used = true; }
+        if (repeatGate('mouse-up', up && pressed(pad, STANDARD.UP), timestamp)) { moveFocus(0, -1); used = true; }
+        if (repeatGate('mouse-down', down && pressed(pad, STANDARD.DOWN), timestamp)) { moveFocus(0, 1); used = true; }
+      } else {
       if (repeatGate('up', up, timestamp)) { moveFocus(0, -1); used = true; }
       else if (repeatGate('down', down, timestamp)) { moveFocus(0, 1); used = true; }
       if (repeatGate('left', left, timestamp)) {
@@ -901,7 +963,9 @@
       if (repeatGate('board-up', ry < -0.72, timestamp)) { used = browseBoard(10) || used; }
       else if (repeatGate('board-down', ry > 0.72, timestamp)) { used = browseBoard(-10) || used; }
 
-      if (edge(pad, STANDARD.A)) { activateFocused(); used = true; }
+      }
+
+      if (edge(pad, STANDARD.A)) { if (preferences.mode === 'mouse') clickCursor(); else activateFocused(); used = true; }
       if (edge(pad, STANDARD.B)) { contextualBack(); used = true; }
       if (edge(pad, STANDARD.X)) {
         if (keyboardState) keyboardBackspace(); else quickAction('manage');
@@ -913,8 +977,8 @@
       }
       if (edge(pad, STANDARD.LB)) { if (!keyboardState) quickAction('deeds'); used = true; }
       if (edge(pad, STANDARD.RB)) { if (!keyboardState) shoulder(1); used = true; }
-      if (edge(pad, STANDARD.LT)) { if (!keyboardState) shoulder(-1); used = true; }
-      if (edge(pad, STANDARD.RT)) { if (!keyboardState) quickAction('primary'); used = true; }
+      if (edge(pad, STANDARD.LT)) { if (preferences.mode === 'focus' && !keyboardState) shoulder(-1); used = true; }
+      if (edge(pad, STANDARD.RT)) { if (preferences.mode === 'focus' && !keyboardState) quickAction('primary'); used = true; }
       if (edge(pad, STANDARD.MENU)) { openQuickMenu(); used = true; }
       if (edge(pad, STANDARD.VIEW)) {
         updateHud();
@@ -969,12 +1033,22 @@
     const pads = getPads();
     if (pads.length) connect(pads[0]);
     pollFrame = root.requestAnimationFrame(poll);
+    runtime = { preferencesChanged() {
+      cursor.vx = 0; cursor.vy = 0;
+      hoveredElement?.classList.remove('controller-hover'); hoveredElement = null;
+      drawCursor(); updateHud();
+    } };
+    return runtime;
   }
 
   return {
     controllerFamily,
     buttonLabels,
     chooseSpatialTarget,
+    advanceCursor,
+    normalizePreferences,
+    configure,
+    getPreferences: () => ({ ...preferences }),
     init,
   };
 });

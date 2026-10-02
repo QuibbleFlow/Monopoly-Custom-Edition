@@ -72,13 +72,16 @@ test('the page dispatches server screens and renders a game ID input for joining
 
 test('server UI uses invitation cards, host Delete confirmation, and host Save & Quit', () => {
   const html = fs.readFileSync('index.html', 'utf8');
+  const menu = fs.readFileSync('multiplayer-ui.js', 'utf8');
 
   assert.match(html, /function incomingGameInvitationsHTML\(\)/);
   assert.match(html, /backendRespondToInvitation\('\$\{esc\(invitation\.invitationId\)\}','accept'\)/);
   assert.match(html, /game\.isHost \? `<button class="btn alt" onclick="backendRenameGame/);
   assert.match(html, /onclick="backendDeleteGame\('\$\{esc\(lobby.gameId\)\}'\)">Delete<\/button>/);
   assert.match(html, /appConfirm\(\s*'Delete this server game/);
-  assert.match(html, /'Save &amp; Quit'/);
+  assert.match(menu, /backendIsHostOfCurrentGame\(\)/);
+  assert.match(menu, /onclick="closeGameMenu\(\);openSaveGameDialog\(\)"/);
+  assert.match(menu, /Save &amp; Quit/);
   assert.match(html, /backendGameRequest\('\/api\/game\/pause'/);
   assert.match(html, /appConfirm\(\s*'Save this match and return everyone to the menu/);
   assert.match(html, /appAlert\(\`Save & Quit failed/);

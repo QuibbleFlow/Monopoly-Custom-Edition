@@ -40,3 +40,29 @@ test('spatial controller navigation wraps when there is nothing farther in that 
   assert.equal(chooseSpatialTarget(items, 1, 1, 0), 0);
   assert.equal(chooseSpatialTarget(items, 0, -1, 0), 1);
 });
+
+
+test('virtual cursor has a deadzone, accelerates smoothly, and stays within the viewport', () => {
+  const { advanceCursor } = require('./controller-support');
+  const prefs={mode:'mouse',sensitivity:1,deadzone:.2};
+  let cursor={x:100,y:100,vx:0,vy:0};
+  assert.deepEqual(advanceCursor(cursor,.1,.1,.016,390,900,prefs),cursor);
+  cursor=advanceCursor(cursor,1,0,.016,390,900,prefs);
+  assert.ok(cursor.x>100 && cursor.vx<1000);
+  const initialSpeed=cursor.vx;
+  for(let i=0;i<100;i++)cursor=advanceCursor(cursor,1,1,.016,390,900,prefs);
+  assert.ok(cursor.vx>initialSpeed);
+  assert.equal(cursor.x,388);
+  assert.ok(cursor.y<=898);
+  const stopped=advanceCursor(cursor,0,0,.016,390,900,prefs);
+  assert.ok(stopped.vx<cursor.vx);
+});
+
+test('controller settings clamp sensitivity and deadzone and support mode switching', () => {
+  const { configure, getPreferences, normalizePreferences }=require('./controller-support');
+  assert.deepEqual(normalizePreferences({mode:'bad',sensitivity:99,deadzone:99}),{mode:'focus',sensitivity:2.5,deadzone:.4});
+  configure({mode:'mouse',sensitivity:.7,deadzone:.15});
+  assert.deepEqual(getPreferences(),{mode:'mouse',sensitivity:.7,deadzone:.15});
+  configure({mode:'focus'});
+  assert.equal(getPreferences().mode,'focus');
+});

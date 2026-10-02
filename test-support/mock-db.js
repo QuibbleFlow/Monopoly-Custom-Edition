@@ -37,8 +37,18 @@ function makeDb(initial = makeDbState()) {
       return result + part + value;
     }, '').replace(/\s+/g, ' ').trim();
 
+    if (query.startsWith('SELECT id FROM accounts WHERE id = $1 FOR UPDATE')) return state.accounts[values[0]] ? [{ id:values[0] }] : [];
+    if (query.startsWith('SELECT id FROM game_saves WHERE owner_id = $1 ORDER BY created_at DESC')) return state.saves.filter(save => save.owner_id === values[0]).sort((a,b) => new Date(b.created_at)-new Date(a.created_at) || b.id.localeCompare(a.id)).map(save => ({ id:save.id }));
+    if (query.startsWith('DELETE FROM game_saves WHERE id = $1 AND owner_id = $2')) { state.saves = state.saves.filter(save => save.id !== values[0] || save.owner_id !== values[1]); return []; }
+    if (query.startsWith('SELECT source_game_id FROM game_saves WHERE id = $1 AND owner_id = $2')) return state.saves.filter(save => save.id === values[0] && save.owner_id === values[1]).map(save => ({ source_game_id:save.source_game_id }));
+    if (query.startsWith('SELECT id, state, version, players FROM game_saves WHERE source_game_id = $1')) return state.saves.filter(save => save.source_game_id === values[0]);
+    if (query.startsWith('UPDATE game_saves SET state = $1::jsonb, players = $2::jsonb, version = $3')) { const save=state.saves.find(save => save.id === values[3]); if(save)Object.assign(save,{state:JSON.parse(values[0]),players:JSON.parse(values[1]),version:values[2]}); return []; }
+    if (query.startsWith('UPDATE game_states SET owner_id = $1 WHERE id = $2')) { const row=state.states.find(row => row.id === values[1]); if(row)row.owner_id=values[0]; return []; }
+    if (query.startsWith('UPDATE game_saves SET owner_id = $1 WHERE source_game_id = $2')) { state.saves.filter(save => save.source_game_id === values[1]).forEach(save => save.owner_id=values[0]); return []; }
+    if (query.startsWith('SELECT g.id FROM games g JOIN game_players gp ON gp.game_id = g.id')) return state.games.filter(game => game.status === 'ACTIVE' && state.players.some(player => player.game_id===game.id && player.account_id===values[0])).map(game => ({id:game.id}));
+    if (query.startsWith('SELECT version, state, board FROM game_states WHERE id = $1')) return state.states.filter(row=>row.id===values[0]);
     if (query.startsWith('SELECT id, avatar_url FROM accounts WHERE id = ANY')) return values[0].filter(id => state.accounts[id]).map(id => ({ id, avatar_url: state.accounts[id].avatar_url || null }));
-    if (query.startsWith('SELECT g.status, EXISTS ( SELECT 1 FROM game_players gp')) {
+    if (query.includes('AS is_member, gs.version, CASE')) {
       const accountId = values[0];
       const knownVersion = values.length > 2 && values[1] != null ? Number(values[1]) : null;
       const gameId = values[values.length - 1];
@@ -50,6 +60,8 @@ function makeDb(initial = makeDbState()) {
       const versionChanged = !stateRow || knownVersion == null || Number(stateRow.version) !== knownVersion;
       return [{
         status: game.status,
+        host_account_id: game.host_account_id,
+        connections: typeof stateRow?.state === 'string' ? JSON.parse(stateRow.state).connections : stateRow?.state.connections,
         is_member: state.players.some(player => player.game_id === gameId && player.account_id === accountId),
         version: stateRow ? stateRow.version : null,
         state: stateRow && versionChanged ? stateRow.state : null,
@@ -142,7 +154,7 @@ function makeDb(initial = makeDbState()) {
         ? [{ '?column?': 1 }]
         : [];
     }
-    if (query.startsWith('SELECT id, status FROM game_invitations WHERE game_id = $1 AND invitee_account_id = $2 FOR UPDATE')) {
+    if (query.startsWith('SELECT id, status FROM game_invitations WHERE game_id = $1 AND invitee_account_id = $2')) {
       return state.invitations.filter(invitation => invitation.game_id === values[0] && invitation.invitee_account_id === values[1])
         .map(invitation => ({ id: invitation.id, status: invitation.status }));
     }
@@ -388,11 +400,12 @@ function makeDb(initial = makeDbState()) {
     if (query.startsWith('SELECT status, host_account_id FROM games WHERE id = $1 FOR UPDATE')) {
       return state.games.filter(game => game.id === values[0]).map(game => ({ status: game.status, host_account_id: game.host_account_id }));
     }
-    if (query.startsWith('SELECT g.*, gp.account_id, gp.seat_index FROM game_players gp JOIN games g ON g.id = gp.game_id WHERE gp.account_id = $1 ORDER BY g.updated_at DESC')) {
+    if (query.startsWith('SELECT g.*, gp.account_id, gp.seat_index, gp.returned_at FROM game_players gp JOIN games g ON g.id = gp.game_id WHERE gp.account_id = $1 ORDER BY g.updated_at DESC')) {
       return state.games.filter(game => state.players.some(player => player.game_id === game.id && player.account_id === values[0]))
         .map(game => ({
           ...game,
           account_id: values[0],
+          returned_at: state.players.find(player => player.game_id === game.id && player.account_id === values[0])?.returned_at,
           seat_index: state.players.find(player => player.game_id === game.id && player.account_id === values[0])?.seat_index ?? 0,
         }));
     }

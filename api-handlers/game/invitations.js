@@ -1,5 +1,7 @@
 const { database, noStore, parseBody, requireAccount, requireSameOrigin } = require('../../lib/account');
 const { serializePlayerRow, serializeGameRow, err } = require('./lifecycle.js');
+const { cancelPausedReconnect, maintainConnections, connectionsDue, reconcileConnections, persistConnections } = require('../../lib/game-connections');
+const engine = require('../../game-engine');
 
 function normalize(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -13,26 +15,30 @@ async function sendGameInvitation({ account, gameId, inviteeAccountId, db = data
   const inviteeId = normalize(inviteeAccountId);
   if (!normalizedGameId || !inviteeId || !UUID_PATTERN.test(inviteeId)) return err('INVALID_REQUEST', 'A game and valid friend account are required.');
   if (inviteeId === account.id) return err('SELF_INVITE', 'You cannot invite yourself.');
+  await maintainConnections(db, normalizedGameId);
 
   return db.begin(async tx => {
     const games = await tx`SELECT * FROM games WHERE id = ${normalizedGameId} FOR UPDATE`;
     const game = games[0];
     if (!game) return err('GAME_NOT_FOUND', 'Game not found.', 404);
     if (game.host_account_id !== account.id) return err('HOST_REQUIRED', 'Only the host can invite players.', 403);
-    if (game.status !== 'WAITING') return err('GAME_NOT_WAITING', 'Players can only be invited to a waiting game.', 409);
+    if (!['WAITING', 'PAUSED'].includes(game.status)) return err('GAME_NOT_WAITING', 'Invite friends from a lobby.', 409);
     const hostMembership = await tx`SELECT account_id FROM game_players
       WHERE game_id = ${normalizedGameId} AND account_id = ${account.id} FOR UPDATE`;
     if (!hostMembership[0]) return err('HOST_NOT_PLAYER', 'The host must occupy a player seat to invite friends.', 403);
+    const members = await tx`SELECT account_id, seat_index, returned_at FROM game_players WHERE game_id = ${normalizedGameId} ORDER BY seat_index ASC FOR UPDATE`;
+    const member = members.find(player => player.account_id === inviteeId);
+    const returning = game.status === 'PAUSED' || !!game.resume_save_id;
 
     const friendship = await tx`SELECT 1 FROM friendships
       WHERE account_low = LEAST(${account.id}::uuid, ${inviteeId}::uuid)
         AND account_high = GREATEST(${account.id}::uuid, ${inviteeId}::uuid)
       FOR KEY SHARE`;
-    if (!friendship[0]) return err('FRIEND_REQUIRED', 'You can only invite a current friend.', 403);
+    if (!friendship[0] && !(returning && member)) return err('FRIEND_REQUIRED', 'You can only invite a friend or a remaining player from your save.', 403);
 
-    const members = await tx`SELECT account_id, seat_index FROM game_players WHERE game_id = ${normalizedGameId} ORDER BY seat_index ASC FOR UPDATE`;
-    if (members.some(player => player.account_id === inviteeId)) return err('ALREADY_IN_GAME', 'That friend is already in this game.', 409);
-    if (members.length >= 8) return err('GAME_FULL', 'This game is full. Maximum 8 players allowed.', 409);
+    if (returning && !member) return err('ORIGINAL_PLAYER_REQUIRED', 'Only remaining players from this save can be invited.', 403);
+    if (member && (!returning || member.returned_at)) return err('ALREADY_IN_GAME', 'That friend is already in this lobby.', 409);
+    if (!member && members.length >= 8) return err('GAME_FULL', 'This game is full. Maximum 8 players allowed.', 409);
 
     const existing = await tx`SELECT id, status FROM game_invitations
       WHERE game_id = ${normalizedGameId} AND invitee_account_id = ${inviteeId} FOR UPDATE`;
@@ -59,12 +65,14 @@ async function listGameInvitations({ account, db = database() }) {
   if (!account?.id) return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   const rows = await db`SELECT i.id, i.game_id, i.inviter_account_id, i.invitee_account_id, i.status, i.created_at,
       host.username AS host_username, target.username AS target_username, g.status AS game_status,
+      g.name AS game_name, COALESCE(b.name, 'Classic board') AS board_name,
       (SELECT COUNT(*)::int FROM game_players gp WHERE gp.game_id = g.id) AS player_count
     FROM game_invitations i
     JOIN games g ON g.id = i.game_id
     JOIN accounts host ON host.id = g.host_account_id
     JOIN accounts target ON target.id = i.invitee_account_id
-    WHERE i.status = 'pending' AND g.status = 'WAITING'
+    LEFT JOIN custom_boards b ON b.id = g.selected_board_id
+    WHERE i.status = 'pending' AND g.status IN ('WAITING', 'PAUSED')
       AND (i.invitee_account_id = ${account.id} OR i.inviter_account_id = ${account.id})
     ORDER BY i.created_at DESC`;
   return {
@@ -76,6 +84,8 @@ async function listGameInvitations({ account, db = database() }) {
       hostUsername: row.host_username,
       inviteeUsername: row.target_username,
       gameStatus: row.game_status,
+      gameName: row.game_name,
+      boardName: row.board_name,
       playerCount: Number(row.player_count),
       createdAt: row.created_at,
     })),
@@ -96,7 +106,22 @@ async function respondToGameInvitation({ account, invitationId, action, db = dat
 
     const games = await tx`SELECT * FROM games WHERE id = ${invitationRefs[0].game_id} FOR UPDATE`;
     const game = games[0];
-    if (!game || game.status !== 'WAITING') return err('GAME_NOT_WAITING', 'This invitation is no longer joinable.', 409);
+    if (!game || !['WAITING', 'PAUSED'].includes(game.status)) return err('GAME_NOT_WAITING', 'This invitation is no longer joinable.', 409);
+    if (game.status === 'PAUSED') {
+      // Check the deadline while holding the game lock, before an invitation
+      // can cancel a reserved player's reconnect window.
+      const states = await tx`SELECT id, version, state, board FROM game_states WHERE id = ${game.id} FOR UPDATE`;
+      if (states[0]) {
+        const state = engine.deserializeState(states[0].state);
+        if (connectionsDue(state, game.status)) {
+          const members = await tx`SELECT * FROM game_players WHERE game_id = ${game.id} ORDER BY seat_index ASC`;
+          const oldHost = game.host_account_id;
+          const result = reconcileConnections(state, game, members);
+          await persistConnections(tx, game, states[0], state, members, result, oldHost);
+          if (game.status !== 'PAUSED') return err('GAME_NOT_WAITING', 'This invitation is no longer joinable.', 409);
+        }
+      }
+    }
 
     const invitations = await tx`SELECT * FROM game_invitations
       WHERE id = ${normalizedInvitationId} AND invitee_account_id = ${account.id} FOR UPDATE`;
@@ -111,6 +136,9 @@ async function respondToGameInvitation({ account, invitationId, action, db = dat
     }
 
     const existingMembership = await tx`SELECT * FROM game_players WHERE game_id = ${game.id} AND account_id = ${account.id}`;
+    if ((game.resume_save_id || game.status === 'PAUSED') && !existingMembership[0]) {
+      return err('ORIGINAL_PLAYER_REQUIRED', 'Only remaining players from the save can return.', 403);
+    }
     if (invitation.status === 'accepted' && existingMembership[0]) {
       const lobbyPlayers = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
         FROM game_players gp JOIN accounts a ON a.id = gp.account_id
@@ -136,6 +164,9 @@ async function respondToGameInvitation({ account, invitationId, action, db = dat
       if (seatIndex >= 8) return err('GAME_FULL', 'This game is full. Maximum 8 players allowed.', 409);
       await tx`INSERT INTO game_players (game_id, account_id, seat_index, joined_at)
         VALUES (${game.id}, ${account.id}, ${seatIndex}, now())`;
+    } else if (game.resume_save_id || game.status === 'PAUSED') {
+      await tx`UPDATE game_players SET returned_at = now() WHERE game_id = ${game.id} AND account_id = ${account.id}`;
+      if (game.status === 'PAUSED') await cancelPausedReconnect(tx, game.id, account.id);
     }
     await tx`UPDATE game_invitations SET status = ${'accepted'}, responded_at = now()
       WHERE id = ${normalizedInvitationId} AND status = 'pending'`;
@@ -148,7 +179,7 @@ async function respondToGameInvitation({ account, invitationId, action, db = dat
       gameId: game.id,
       game: serializeGameRow(game),
       players: lobbyPlayers.map(serializePlayerRow),
-      status: 'WAITING',
+      status: game.status,
     };
   });
 }

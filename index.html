@@ -608,7 +608,7 @@ input:focus-visible {
   /* container-type: size (not just inline-size) is the fix for the board
      getting cropped: it makes cqh (container-query HEIGHT units), not
      just cqw, available below. .scene then sizes itself with min()
-     formulas using both cqw and cqh (see .scene.tilt/.flat) so it is
+     formulas using both cqw and cqh (see .scene.tilt) so it is
      guaranteed to fit whichever axis -- width or height -- is tighter,
      on any screen shape. The old approach (height:100%; width:auto;
      max-width:100%; aspect-ratio) only clamped the WIDTH axis; on a
@@ -626,7 +626,6 @@ input:focus-visible {
 /* The largest box that fits BOTH axes of .scene-wrap while keeping the
    exact aspect ratio -- see the comment on .scene-wrap above. */
 .scene.tilt { aspect-ratio: 1 / .76; width: min(100cqw, 100cqh / .76); height: min(100cqh, 100cqw * .76); --unsq: 1.35; }   /* --unsq stretches pieces so they look round when tilted */
-.scene.flat { aspect-ratio: 1 / 1; width: min(100cqw, 100cqh); height: min(100cqh, 100cqw); --unsq: 1; }
 .plane {
   position: absolute; aspect-ratio: 1 / 1; top: 50%;
   transition-property: transform; transition-timing-function: ease-in-out; transition-duration: 0ms;
@@ -650,7 +649,6 @@ input:focus-visible {
    is that, not a leftover of the old aspect-ratio bug. 72%/margin 14%
    leaves a much bigger cushion than the old 80%/10% did. */
 .scene.tilt .plane { width: 76%; left: 12%; margin-top: -38%; }
-.scene.flat .plane { width: 80%; left: 10%; margin-top: -40%; }
 .plane::before {     /* the wooden table around the board */
   /* PLANE_MARGIN (80% plane width, 10% margin each side) + TABLE_INSET
      (-7%, i.e. the table extends 7% of the plane's own size beyond the
@@ -1347,6 +1345,7 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
 
 .match-menu-tabs{margin-bottom:20px}.match-menu-options{margin-top:18px}.match-menu-options summary{cursor:pointer;font-weight:700;margin-bottom:12px}.match-menu-row{gap:16px}.match-menu-row .social-name{min-width:0;overflow-wrap:anywhere}.match-menu-row p{margin:5px 0 0;font-weight:400}.match-menu-row>.btn{flex-shrink:0}
 </style>
+<link rel="stylesheet" href="multiplayer-ui.css">
 </head>
 
 <body>
@@ -1458,8 +1457,6 @@ const CHEST_CARDS = window.MonopolyCards.chest;
 let game = null;
 let busy = false;         // true while an animation plays (buttons lock)
 let popup = null;         // a Chance or Community Chest card on screen
-let cameraOn = true;      // zoom in when pieces move
-let tiltOn = true;   // 3D tilted view is always on
 const ui = { manage: null, deeds: null, peek: null, intro: null, notice: '', viewingTrade: false, reviewingTrade: false };
 /* Online play state. role is null for local pass-and-play, 'host' for the
    person who starts the room, or 'guest' for everyone who joins by typing
@@ -1475,6 +1472,7 @@ let authoritativeAppliedGameId = null;
 let lastAuthoritativeDiceEvent = '';
 let backendLobbyPollId = null;
 let backendLobbyPollInFlight = false;
+let backendLobbyGeneration = 0;
 let authoritativeShowStartIntroGameId = null;
 const authoritativeStartIntroShown = new Set();
 function isBackendAuthoritativeGame() {
@@ -1986,7 +1984,6 @@ const sideOf = i => (i < 10 ? 'bottom' : i < 20 ? 'left' : i < 30 ? 'top' : 'rig
      timeout hands control back to whatever the auto target currently is. */
 const CAM = {
   tilt: { a: 42, base: 0.15, follow: 1.45, close: 1.85, manualMax: 2.6, shift: -0.045 },
-  flat: { a: 0,  base: 0,    follow: 1.2,  close: 1.6,  manualMax: 2.2, shift: 0 },
 };
 const YAW = { bottom: 0, left: 7, top: 0, right: -7 };
 // How far (deg) the plane must turn so a side's text reads horizontal once
@@ -2024,11 +2021,11 @@ function zoneAt(xPct, yPct, currentZone) {
 // (yawBase, only while tilted), and the full-zoom reading rotation (alignYaw).
 function squareTarget(sq) {
   const c = cellCenter(sq), side = sideOf(sq);
-  return { x: c.x, y: c.y, yawBase: tiltOn ? YAW[side] : 0, alignYaw: sq % 10 === 0 ? 0 : ALIGN[side] };
+  return { x: c.x, y: c.y, yawBase: YAW[side], alignYaw: sq % 10 === 0 ? 0 : ALIGN[side] };
 }
 function pointTarget(xPct, yPct) {
   const zone = zoneAt(xPct, yPct);
-  return { x: xPct, y: yPct, yawBase: tiltOn ? (YAW[zone] || 0) : 0, alignYaw: ALIGN[zone] || 0 };
+  return { x: xPct, y: yPct, yawBase: (YAW[zone] || 0), alignYaw: ALIGN[zone] || 0 };
 }
 
 // A full camera pose aimed at a target {x,y,yawBase,alignYaw}, at closeness
@@ -2112,8 +2109,8 @@ let preMoveSnapshot = null;     // manual view (if any) to resume once the seque
 // change where the camera WOULD be if nothing else is in control -- they
 // never flip manualActive, so an active manual view is left completely alone.
 function cameraFocus(sq, ms, mode) {
-  if (!cameraOn || reduceMotion || !$('plane')) return;
-  const cfg = tiltOn ? CAM.tilt : CAM.flat, W = $('plane').offsetWidth;
+  if (reduceMotion || !$('plane')) return;
+  const cfg = CAM.tilt, W = $('plane').offsetWidth;
   // 'close' (property peek) is fully zoomed + aligned; 'follow' (token hopping)
   // is a partial, proportional zoom -- the same alignment math as manual zoom uses.
   const closeness = mode === 'close' ? 1 : (cfg.follow - cfg.base) / (cfg.close - cfg.base);
@@ -2121,7 +2118,7 @@ function cameraFocus(sq, ms, mode) {
 }
 function cameraReset(ms) {
   if (!$('plane')) return;
-  const cfg = tiltOn ? CAM.tilt : CAM.flat, W = $('plane').offsetWidth;
+  const cfg = CAM.tilt, W = $('plane').offsetWidth;
   autoTarget = { dz: cfg.base * W, a: cfg.a, yaw: 0, tx: 0, ty: 0, sy: cfg.shift * W, tau: Math.max(ms === undefined ? T(700) : ms, 40) / 3 };
 }
 
@@ -2169,7 +2166,7 @@ function finishMovementCamera(ms) {
 let manualPoint = null;
 function manualFocusTarget() {
   const zone = orientZone || rawOrientZone();
-  const rot = { yawBase: tiltOn ? (YAW[zone] || 0) : 0, alignYaw: ALIGN[zone] || 0 };
+  const rot = { yawBase: (YAW[zone] || 0), alignYaw: ALIGN[zone] || 0 };
   if (manualPoint) return { x: manualPoint.x, y: manualPoint.y, ...rot };
   if (ui.manage && ui.manage.focused != null) { const c = cellCenter(ui.manage.focused); return { x: c.x, y: c.y, ...rot }; }
   if (game) { try { const c = cellCenter(cur().pos); return { x: c.x, y: c.y, ...rot }; } catch (e) { /* no current player yet */ } }
@@ -2216,7 +2213,7 @@ function cameraTick(t) {
   const plane = $('plane');
   if (plane) {
     ensureCameraPlaneMeasurement(plane);
-    const cfg = tiltOn ? CAM.tilt : CAM.flat, W = cameraPlaneWidth || 1;
+    const cfg = CAM.tilt, W = cameraPlaneWidth || 1;
     if (manualActive) settleOrientZone(t);
     const target = manualActive ? poseFor(cfg, manualFocusTarget(), manualZoom, W) : autoTarget;
     const tau = manualActive ? 90 : (autoTarget.tau || 200);
@@ -2772,7 +2769,7 @@ function startGameTick() {
       // Server multiplayer never falls through to the old PeerJS host path.
       // The authenticated host asks the server to process an expired timer;
       // the server supplies its own timestamp and re-checks the game state.
-      if (backendIsHostOfCurrentGame() && !authoritativeActionInFlight) {
+      if (backendIsHostOfCurrentGame() && !window.authoritativeGame.presence?.waitingFor && !authoritativeActionInFlight) {
         submitAuthoritativeGameplayAction('gameTick', { type: 'GAME_TICK' });
       }
       return;
@@ -3113,14 +3110,14 @@ function buildShell() {
         🎵<input type="range" id="volSlider" min="0" max="100" step="1" oninput="setMusicVolume(this.value)">
       </label>
     </div>
-    <div class="corner-tr"><span id="saveGameBtnHolder"></span><span id="pauseBtnHolder"></span></div>
+    <div class="corner-tr"><span id="matchConnectionStatus" class="connection-status" role="status"></span><button class="btn alt" onclick="openGameMenu()">☰ Game Menu</button></div>
     <div class="layout">
       <div class="side-left">
         <div class="hud"><div class="hud-pills" id="hudPills"></div><div class="hud-floats" id="hudFloats"></div></div>
       </div>
       <div class="stage-col">
         <div class="scene-wrap">
-          <div class="scene ${tiltOn ? 'tilt' : 'flat'}" id="scene">
+          <div class="scene tilt" id="scene">
             <div class="plane" id="plane">
               <div class="board" id="board">${cells}
                 <div class="board-center" id="center">
@@ -3157,7 +3154,6 @@ function buildShell() {
 }
 function updateTopButtons() {
   const sb = $('soundBtn'); if (sb) sb.textContent = soundOn ? 'Sound on' : 'Sound off';
-  const cb = $('camBtn'); if (cb) cb.textContent = cameraOn ? 'Camera zoom on' : 'Camera zoom off';
   const vs = $('volSlider');
   if (vs) vs.value = Math.round(musicVolume * 100);
 }
@@ -3167,12 +3163,7 @@ function toggleSound() {
   if (soundOn) { sfx.step(); startBgMusic(); }
   else if (bgMusic) { bgMusic.pause(); }
 }
-function toggleCamera() {
-  cameraOn = !cameraOn;
-  if (!cameraOn) cameraReset(200);
-  updateTopButtons();
-  queueAccountSettings({ cameraPreferences: { follow: cameraOn, tilt: tiltOn } });
-}
+
 window.addEventListener('resize', () => { if (game && !busy && !ui.manage && $('plane')) cameraReset(0); if (game) fitCellNames(); });
 let newTimer = null;
 function confirmNew() {                 // two clicks so nobody restarts by accident
@@ -3282,13 +3273,15 @@ function updateHud() {
     const owned = game.owners.filter(o => o === p.id).length;
     const diff = prevMoney[p.id] === undefined ? 0 : p.money - prevMoney[p.id];
     const initial = (p.name.trim().charAt(0) || String(p.id + 1)).toUpperCase();
+    const presence = window.authoritativeGame?.presence?.players.find(item => item.accountId === p.accountId);
     const offline = net.role && connStatus[p.id] === false;
+    const connectionLabel = p.removed ? 'Left match' : presence?.status === 'reconnecting' ? 'Reconnecting…' : '';
     const flashCls = diff > 0 ? 'flash-up' : diff < 0 ? 'flash-down' : '';
     const popCls = diff > 0 ? 'pop-up' : diff < 0 ? 'pop-down' : '';
     return `<div class="pill ${p.id === cur().id && !game.over ? 'current' : ''} ${p.bankrupt ? 'out' : ''} ${flashCls}" id="pill${p.id}" style="--pc:${p.color}">
       <span class="order" title="${ordinal(turnPos + 1)} in turn order" aria-label="${ordinal(turnPos + 1)} in turn order">${turnPos + 1}</span>
       <span class="avatar">${playerAvatarContent(p, initial)}</span>
-      <span class="ptext"><span class="pname">${esc(p.name)}${p.inJail ? ' (in jail)' : ''}${offline ? ' (offline)' : ''}</span><span class="pmoney ${popCls}">${fmt(p.money)}</span></span>
+      <span class="ptext"><span class="pname">${esc(p.name)}${p.inJail ? ' (in jail)' : ''}${offline ? ' (offline)' : ''}${connectionLabel ? `<small class="player-connection">${connectionLabel}</small>` : ''}</span><span class="pmoney ${popCls}">${fmt(p.money)}</span></span>
       <span class="badge" title="Properties owned" aria-label="${owned} properties owned">${owned}</span>
     </div>`;
   }).join('');
@@ -3337,8 +3330,6 @@ function updateDock() {
     </div>
     <div class="dock-group action">${primary}</div>`;
   $('turnLabel').innerHTML = game.over ? 'Game over' : `Turn ${game.turn || 1}<br>${esc(p.name)}'s turn`;
-  updatePauseBtn();
-  updateSaveGameBtn();
 }
 // A postponed trade closes its own popup (see updateModal) so it doesn't
 // keep nagging the two people involved -- this button, sitting with the
@@ -3394,17 +3385,11 @@ function updateLiveCountdowns(now = Date.now()) {
 // this mirrors exactly the host check saveGame() itself enforces
 // server-side, so this is purely a UX convenience, never the real gate.
 function backendIsHostOfCurrentGame() {
-  return !!(isBackendAuthoritativeGame() && accountUser && backendLobby &&
-    window.authoritativeGame && backendLobby.gameId === window.authoritativeGame.gameId &&
-    backendLobby.game && backendLobby.game.hostAccountId === accountUser.id);
+  return !!(isBackendAuthoritativeGame() && accountUser &&
+    (window.authoritativeGame.hostAccountId || backendLobby?.game?.hostAccountId) === accountUser.id);
 }
 let saveGameInFlight = false;
-function updateSaveGameBtn() {
-  const el = $('saveGameBtnHolder');
-  if (!el) return;
-  if (!game || game.over || !backendIsHostOfCurrentGame()) { el.innerHTML = ''; return; }
-  el.innerHTML = `<button class="btn alt" ${saveGameInFlight ? 'disabled' : ''} onclick="openSaveGameDialog()">${saveGameInFlight ? 'Saving &amp; quitting...' : 'Save &amp; Quit'}</button>`;
-}
+
 function appDialog({ title = 'Monopoly', message = '', value = null, maxLength = 80, confirmLabel = 'OK', cancelLabel = null } = {}) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -3496,7 +3481,7 @@ async function appAlert(message, title = 'Monopoly') {
 async function openSaveGameDialog() {
   if (saveGameInFlight) return;
   const confirmed = await appConfirm(
-    'Save this match and return everyone to the menu? The original players must all return before it can continue.',
+    'Save this match and return everyone to the menu? Load the save and invite the remaining players to continue. You have 2 save slots; a third save replaces the oldest.',
     'Save & Quit?',
     'Save & Quit'
   );
@@ -3506,7 +3491,6 @@ async function openSaveGameDialog() {
 async function backendSaveAndQuitGame(gameId) {
   if (!gameId || saveGameInFlight) return;
   saveGameInFlight = true;
-  updateSaveGameBtn();
   try {
     const result = await backendGameRequest('/api/game/pause', {
       method: 'POST',
@@ -3521,12 +3505,13 @@ async function backendSaveAndQuitGame(gameId) {
     await appAlert(`Save & Quit failed. You are still in the match.\n\n${error.message}`, 'Save & Quit failed');
   } finally {
     saveGameInFlight = false;
-    updateSaveGameBtn();
-  }
+    }
 }
 
 async function handleServerGamePaused(gameId, refreshGames = false) {
   if (window.authoritativeGame?.gameId !== gameId) return;
+  stopMatchHeartbeat();
+  closeGameMenu();
   stopBackendLobbyPolling();
   await window.authoritativeGame.clearAuthoritativeState();
   authoritativeAppliedGameId = null;
@@ -3537,7 +3522,7 @@ async function handleServerGamePaused(gameId, refreshGames = false) {
   backendLobby = null;
   setup.screen = 'serverCreate';
   serverCreateTab = 'continue';
-  backendSocialError = 'Match saved. All original players must return to resume.';
+  backendSocialError = 'Match saved. Load your save, then invite the remaining players.';
   accountMessage = 'Match saved. Open Continue to resume.';
   if (refreshGames) await refreshBackendMyGames();
   renderSetup();
@@ -3545,14 +3530,7 @@ async function handleServerGamePaused(gameId, refreshGames = false) {
 
 // Only the host (seat 0) ever sees a working pause control; guests and
 // local pass-and-play with nobody else connected don't get one at all.
-function updatePauseBtn() {
-  const el = $('pauseBtnHolder');
-  if (!el) return;
-  if (isBackendAuthoritativeGame()) { el.innerHTML = ''; return; }
-  const isHost = !net.role || net.myPid === 0;
-  if (!game || !isHost || net.role === 'guest') { el.innerHTML = ''; return; }
-  el.innerHTML = `<button class="btn alt" onclick="act('hostSetPause', ${!game.paused}, Date.now())">${game.paused ? 'Resume game' : 'Pause game'}</button>`;
-}
+
 function updatePauseOverlay() {
   const el = $('pauseOverlay');
   if (!el) return;
@@ -4750,7 +4728,7 @@ function renderHostSetup() {
         ? (isResumeLobby
           ? `<button class="btn" onclick="backendResumeGame('${esc(backendLobby.gameId)}')">Resume game</button>`
           : `<button class="btn" onclick="backendStartGame('${esc(backendLobby.gameId)}')">Start server lobby</button>`)
-        : (isResumeLobby ? '<p class="muted">Waiting for every original player to return.</p>' : '')}
+        : (isResumeLobby ? '<p class="muted">Invite the remaining players to continue.</p>' : '')}
     </div>` : `
     <div class="panel acc-blue">
       <h2>Server lobby</h2>
@@ -4894,7 +4872,7 @@ const DEFAULT_ACCOUNT_SETTINGS = {
   musicVolume: 35,
   soundEffectsVolume: 100,
   interfacePreferences: { soundEnabled: true },
-  cameraPreferences: { follow: true, tilt: true },
+  controllerPreferences: { mode: 'focus', sensitivity: 1.2, deadzone: .18 },
   gamePreferences: { playerCount: 2 },
   other: {},
 };
@@ -4909,6 +4887,8 @@ let pendingAccountSettings = {};
 
 if (window.authoritativeGame) {
   window.authoritativeGame.subscribe(async snapshot => {
+    if (typeof updateMatchConnectionUi === 'function') updateMatchConnectionUi(snapshot);
+    if (backendLobby?.gameId === snapshot?.gameId && snapshot.hostAccountId) backendLobby.game.hostAccountId = snapshot.hostAccountId;
     if (snapshot?.gameId && snapshot.status === 'PAUSED') {
       await handleServerGamePaused(snapshot.gameId, true);
       return;
@@ -4967,6 +4947,7 @@ if (window.authoritativeGame) {
       beginMovementCamera();
       moveCameraReset(T(400));
       await animateDice(roll.dice[0], roll.dice[1]);
+      if (window.authoritativeGame.gameId !== snapshot.gameId || !game) return;
       const player = game.players[roll.playerId] || finalGame.players[roll.playerId];
       if (player) {
         log(`${player.name} rolled ${roll.dice[0]} + ${roll.dice[1]}${roll.isDouble ? ' (doubles)' : ''}.`);
@@ -4975,7 +4956,8 @@ if (window.authoritativeGame) {
       await presentAuthoritativeTurnEvents(events, roll.playerId);
 
       // Apply the settled snapshot only AFTER the presentation finishes.
-      game = finalGame;
+      if (window.authoritativeGame.gameId !== snapshot.gameId || !game) return;
+      game = MonopolyGameEngine.deserializeState(window.authoritativeGame.state);
       authoritativeAppliedGameId = snapshot.gameId;
       if (!wasBusy) busy = false;
       finishMovementCamera(T(600));
@@ -5038,6 +5020,7 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
   ]);
 
   for (const event of events) {
+    if (!game || !document.getElementById('tokens')) return;
     if (event.type === 'MOVE_REQUESTED' || event.type === 'CARD_MOVEMENT_REQUESTED') {
       stepDuration = stepTime(Math.max(1, Number(event.steps) || 1));
       landingLogged = false;
@@ -5251,7 +5234,7 @@ async function refreshBackendSocial() {
     return;
   }
   try {
-    const social = await accountRequest('/api/friends/snapshot');
+    const social = await fetchSocialSnapshot();
     backendFriends = Array.isArray(social.friends) ? social.friends : [];
     backendGameInvitations = Array.isArray(social.invitations) ? social.invitations : [];
     if (typeof friendsScreenState !== 'undefined') {
@@ -5315,7 +5298,8 @@ async function backendResumeGame(gameId) {
 }
 
 
-function stopBackendLobbyPolling() {
+function stopBackendLobbyPolling(preserveRequest = false) {
+  if (!preserveRequest) backendLobbyGeneration += 1;
   if (backendLobbyPollId) clearInterval(backendLobbyPollId);
   backendLobbyPollId = null;
   backendLobbyPollInFlight = false;
@@ -5332,25 +5316,44 @@ function startBackendLobbyPolling(gameId) {
   backendLobbyPollId = setInterval(() => {
     if (document.visibilityState === 'hidden' || backendLobbyPollInFlight || !backendLobby || backendLobby.gameId !== gameId) return;
     backendRefreshLobby(gameId, { fromPoll: true });
-  }, 750);
+  }, 1250);
 }
 
 async function activateBackendGame(payload) {
   stopBackendLobbyPolling();
+  await startMatchHeartbeat(payload.gameId);
   if (window.authoritativeGame) {
     await window.authoritativeGame.setAuthoritativeState(payload);
     window.authoritativeGame.startPolling(payload.gameId);
   }
 }
 
-async function backendGameRequest(path, options = {}) {
+const pendingBackendRequests = new Map();
+function backendGameRequest(path, options = {}) {
+  if (!options.method || options.method === 'GET') return performBackendGameRequest(path, options);
+  const key = `${options.method}:${path}:${options.body || ''}`;
+  if (pendingBackendRequests.has(key)) return pendingBackendRequests.get(key);
+  const controls = path === '/api/game/connection' && /heartbeat/.test(options.body || '') ? [] : [...document.querySelectorAll('#app button[onclick], #gameMenuOverlay button[onclick]')]
+    .filter(button => /backend|abandonActive/.test(button.getAttribute('onclick')) && !button.disabled);
+  controls.forEach(button => { button.disabled = true; button.setAttribute('aria-busy','true'); });
+  const request = performBackendGameRequest(path, options).finally(() => {
+    pendingBackendRequests.delete(key);
+    controls.filter(button => button.isConnected).forEach(button => { button.disabled = false; button.removeAttribute('aria-busy'); });
+  });
+  pendingBackendRequests.set(key, request);
+  return request;
+}
+async function performBackendGameRequest(path, options = {}) {
   const response = await fetch(path, {
     credentials: 'same-origin',
     ...options,
     headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) },
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error?.message || result.error || `Server lobby request failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(result.error?.message || result.error || `Request failed (${response.status}).`);
+    error.code = result.error?.code; error.status = response.status; throw error;
+  }
   return result;
 }
 
@@ -5442,7 +5445,8 @@ async function backendRejoinPausedGame(gameId) {
   }
 }
 
-async function backendRenameGame(gameId, currentName) {
+async function backendRenameGame(gameId, currentName = null) {
+  currentName ??= backendMyGames.find(game => (game.gameId || game.id) === gameId)?.name || backendLobby?.game?.name || 'Match';
   if (!gameId) return;
   const nextName = await appPrompt('Server game name:', currentName || 'Server game', 'Rename server game', 80);
   if (nextName == null) return;
@@ -5503,7 +5507,16 @@ async function backendInviteFriend(gameId, friendId) {
 }
 
 async function backendRespondToInvitation(invitationId, action) {
+  if (cornerSocialActionPending) return false;
+  if (action === 'accept' && isBackendAuthoritativeGame()) {
+    if (!await appConfirm('Leave your current match permanently and join this invitation?', 'Join another match?', 'Leave and join')) { backendSocialError = 'Invitation kept in Friends.'; return false; }
+  }
+  cornerSocialActionPending = true;
   try {
+    if (action === 'accept' && isBackendAuthoritativeGame()) {
+      await backendGameRequest('/api/game/connection', { method: 'POST', body: JSON.stringify({ gameId: window.authoritativeGame.gameId, action: 'leave' }) });
+      await clearActiveMatchUi();
+    }
     const result = await backendGameRequest(`/api/game/invitations/${encodeURIComponent(invitationId)}`, {
       method: 'PATCH',
       body: JSON.stringify({ action }),
@@ -5518,12 +5531,14 @@ async function backendRespondToInvitation(invitationId, action) {
       setup.screen = 'serverLobby';
       startBackendLobbyPolling(result.gameId);
     }
+    socialSnapshotCache = null;
     backendSocialError = action === 'accept' ? '' : 'Invitation declined.';
     await refreshBackendMyGames();
+    return true;
   } catch (error) {
     backendSocialError = error.message;
-  }
-  renderSetup();
+    return false;
+  } finally { cornerSocialActionPending = false; renderSetup(); }
 }
 
 async function sendLobbyFriendRequest(username) {
@@ -5562,11 +5577,13 @@ function backendLobbyRenderSignature(lobby) {
 
 async function backendRefreshLobby(gameId, options = {}) {
   if (!gameId || backendLobbyPollInFlight) return;
+  const requestGeneration = backendLobbyGeneration;
   const previousStatus = backendLobby?.gameId === gameId ? backendLobby?.game?.status : null;
   const previousSignature = backendLobbyRenderSignature(backendLobby);
   backendLobbyPollInFlight = true;
   try {
     const result = await backendGameRequest(`/api/game/lobby?gameId=${encodeURIComponent(gameId)}`);
+    if (requestGeneration !== backendLobbyGeneration) return;
     backendLobby = {
       gameId: result.gameId,
       game: result.game || null,
@@ -5580,10 +5597,12 @@ async function backendRefreshLobby(gameId, options = {}) {
       // starting-order reveal. Reopening/reconnecting to an ACTIVE match
       // should catch up immediately instead of replaying the match intro.
       if (previousStatus === 'WAITING') authoritativeShowStartIntroGameId = result.gameId;
-      stopBackendLobbyPolling();
+      stopBackendLobbyPolling(true);
       if (window.authoritativeGame.gameId && window.authoritativeGame.gameId !== result.gameId) {
         await window.authoritativeGame.clearAuthoritativeState();
       }
+      await startMatchHeartbeat(result.gameId);
+      if (requestGeneration !== backendLobbyGeneration) return;
       const state = await window.authoritativeGame.fetchLatest(result.gameId);
       if (state) window.authoritativeGame.startPolling(result.gameId);
       return;
@@ -5593,7 +5612,7 @@ async function backendRefreshLobby(gameId, options = {}) {
   } catch (error) {
     if (!options.fromPoll) setAccountStatus(error.message);
   } finally {
-    backendLobbyPollInFlight = false;
+    if (requestGeneration === backendLobbyGeneration) backendLobbyPollInFlight = false;
   }
 }
 
@@ -5691,12 +5710,12 @@ function setServerCreateTab(tab) {
 }
 function backendSaveRowHTML(save) {
   const live = backendMyGames.find(game => (game.gameId || game.id) === save.sourceGameId && ['ACTIVE', 'PAUSED'].includes(game.status));
-  const action = live ? (live.status === 'PAUSED' ? `backendRejoinPausedGame('${esc(live.gameId || live.id)}')` : `backendOpenGame('${esc(live.gameId || live.id)}')`) : `backendResumeFromSave('${esc(save.saveId)}')`;
+  const action = `backendResumeFromSave('${esc(save.saveId)}')`;
   const updated = new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleDateString();
-  return `<div class="social-row match-menu-row"><div class="social-name"><strong>${esc(save.name)}</strong><p class="muted">${esc((save.players || []).map(player => player.username || 'Player').join(', '))} · Saved ${esc(updated)}</p></div><button class="btn" onclick="${action}">${live?.status === 'ACTIVE' ? 'Continue' : live?.status === 'PAUSED' ? 'Rejoin' : 'Resume'}</button></div>`;
+  return `<div class="social-row match-menu-row"><div class="social-name"><strong>${esc(save.name)}</strong><p class="muted">${esc((save.players || []).map(player => player.username || 'Player').join(', '))} · Saved ${esc(updated)}</p></div><button class="btn" onclick="${action}">Load save</button><details class="save-file-options"><summary aria-label="Save options">⋮</summary><button class="btn alt" onclick="renameSavedMatch('${esc(save.saveId)}')">Rename</button><button class="btn alt danger" onclick="deleteSavedMatch('${esc(save.saveId)}')">Delete</button></details></div>`;
 }
 function renderServerCreateSetup() {
-  const openGames = backendMyGames.filter(game => ['WAITING', 'ACTIVE', 'PAUSED'].includes(game.status) && !backendSaves.some(save => save.sourceGameId === (game.gameId || game.id)));
+  const openGames = backendMyGames.filter(game => ['WAITING', 'ACTIVE'].includes(game.status) && !backendSaves.some(save => save.sourceGameId === (game.gameId || game.id)));
   const openRows = openGames.map(game => {
     const id = game.gameId || game.id;
     return `<div class="social-row match-menu-row"><div class="social-name"><strong>${esc(game.name || 'Match')}</strong><p class="muted">${game.status === 'WAITING' ? 'Waiting in lobby' : game.status === 'PAUSED' ? 'Waiting for original players' : 'Match in progress'}</p></div><button class="btn" onclick="${game.status === 'PAUSED' ? `backendRejoinPausedGame('${esc(id)}')` : `backendOpenGame('${esc(id)}')`}">${game.status === 'ACTIVE' ? 'Continue' : game.status === 'PAUSED' ? 'Rejoin' : 'Open lobby'}</button></div>`;
@@ -5706,7 +5725,7 @@ function renderServerCreateSetup() {
     <div class="seg match-menu-tabs" role="tablist" aria-label="Match menu"><button class="btn ${serverCreateTab === 'new' ? '' : 'alt'}" role="tab" aria-selected="${serverCreateTab === 'new'}" onclick="setServerCreateTab('new')">New match</button><button class="btn ${serverCreateTab === 'continue' ? '' : 'alt'}" role="tab" aria-selected="${serverCreateTab === 'continue'}" onclick="setServerCreateTab('continue')">Continue</button></div>
     ${!accountUser ? `<button class="btn" onclick="toggleCornerMenu('profile')">Sign in</button>` : ''}
     ${serverCreateTab === 'new' ? `<div class="panel acc-blue"><h2>Start a new match</h2><p class="muted">Invite your friends, then start together. A save file is created the first time you choose Save &amp; Quit.</p><button class="btn" ${!accountUser || backendLobbyController.inFlight ? 'disabled' : ''} onclick="backendStartNewMatch()">${backendLobbyController.inFlight ? 'Starting…' : 'Start a new match'}</button><details class="match-menu-options"><summary>Board: ${esc(selectedHostBoard?.name || 'Classic board')}</summary><button class="btn alt" onclick="openBoardsScreen(true)">Choose board</button></details>${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}</div>`
-      : `<div class="panel acc-green"><h2>Continue playing</h2>${openRows}${backendSaves.map(backendSaveRowHTML).join('')}${!openGames.length && !backendSaves.length ? '<p class="muted">No open matches or saves yet.</p>' : ''}</div>`}
+      : `<div class="panel acc-green"><h2>Continue playing</h2><p class="save-slot-count">${backendSaves.length} / 2 save slots used</p><p class="muted">Only the host loads saves, then invites the remaining players. A third save replaces the oldest.</p>${openRows}${backendSaves.map(backendSaveRowHTML).join('')}${!openGames.length && !backendSaves.length ? '<p class="muted">No open matches or saves yet.</p>' : ''}</div>`}
     ${backendSocialError ? `<p role="status">${esc(backendSocialError)}</p>` : ''}
     <button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>`;
 }
@@ -5719,13 +5738,13 @@ function renderServerLobbySetup() {
   const isHost = !!accountUser && lobby?.game?.hostAccountId === accountUser.id;
   const lobbyPanel = lobby && lobby.gameId ? `
     <div class="panel acc-blue">
-      <h2>Server match <span class="tag">${esc(status)}</span></h2>
+      <h2>${esc(lobby.game.name || 'Match lobby')}</h2>
       <p class="muted">Hosted by ${esc(host?.username || 'a player')}</p>
-      <button class="btn alt" onclick="openFriendsScreen()">Invite friends</button>
+      ${isHost ? status === 'PAUSED' || isSnapshotResume ? `<button class="btn" onclick="backendInviteRemainingPlayers('${esc(lobby.gameId)}')" ${cornerSocialActionPending ? 'disabled' : ''}>${cornerSocialActionPending ? 'Inviting…' : 'Invite remaining players'}</button>` : '<button class="btn alt" onclick="openFriendsScreen()">Invite friends</button>' : ''}
       <details class="match-menu-options"><summary>Match options</summary><div class="row">
         <button class="btn alt" onclick="backendRefreshLobby('${esc(lobby.gameId)}')">Refresh</button>
         <button class="btn alt" onclick="backendLeaveGame('${esc(lobby.gameId)}')">Leave</button>
-        ${isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(lobby.gameId)}','${esc(lobby.game?.name || 'Match')}')">Rename</button><button class="btn alt" onclick="backendDeleteGame('${esc(lobby.gameId)}')">Delete</button>` : ''}
+        ${isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(lobby.gameId)}')">Rename</button><button class="btn alt" onclick="backendDeleteGame('${esc(lobby.gameId)}')">Delete</button>` : ''}
       </div></details>
       ${backendLobbyPlayersHTML(lobby.players, status === 'PAUSED' || isSnapshotResume ? 'Original players' : 'Players', {
         isPaused: status === 'PAUSED', isResume: isSnapshotResume,
@@ -5736,7 +5755,7 @@ function renderServerLobbySetup() {
           : `<button class="btn" onclick="backendStartGame('${esc(lobby.gameId)}')">Start game</button>`)
         : ''}
       ${status === 'PAUSED' && lobby.canResume && isHost ? `<button class="btn" onclick="backendResumeGame('${esc(lobby.gameId)}')">Continue game</button>` : ''}
-      ${status === 'PAUSED' && !lobby.canResume ? '<p class="muted">Waiting for every original player to return.</p>' : ''}
+      ${status === 'PAUSED' && !lobby.canResume ? '<p class="muted">Invite the remaining players to continue.</p>' : ''}
     </div>` : `
     <div class="panel acc-blue">
       <h2>Server multiplayer</h2>
@@ -5764,7 +5783,7 @@ function renderServerJoinSetup() {
       : `<button class="btn alt" onclick="backendOpenGame('${esc(gameId)}')">${status === 'ACTIVE' ? 'Continue' : 'Open'}</button>`;
     return `<div class="social-row"><span class="social-name">${esc(game.name || 'Server game')}</span>
       <span class="tag">${status}</span>${action}
-      ${game.isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(gameId)}','${esc(game.name || 'Server game')}')">Rename</button>` : ''}</div>`;
+      ${game.isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(gameId)}')">Rename</button>` : ''}</div>`;
   }).join('');
 
   $('app').innerHTML = `<div class="setup">
@@ -5774,7 +5793,7 @@ function renderServerJoinSetup() {
     ${incomingGameInvitationsHTML() || '<div class="panel acc-orange"><p class="muted">No pending invitations.</p></div>'}
     ${games ? `<div class="panel acc-yellow"><h2>My server games</h2>${games}</div>` : ''}
     <details class="panel acc-blue">
-      <summary>Debug: join by game ID</summary>
+      <summary>Join with a match code</summary>
       <label class="muted" for="serverGameId">Server game ID</label>
       <input type="text" id="serverGameId" value="${esc(backendJoinGameId)}" autocomplete="off">
       <button class="btn alt" ${backendLobbyController.inFlight || !accountUser ? 'disabled' : ''}
@@ -5796,7 +5815,7 @@ function applyAccountSettings(settings = {}) {
     ...DEFAULT_ACCOUNT_SETTINGS,
     ...settings,
     interfacePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.interfacePreferences, ...(settings.interfacePreferences || {}) },
-    cameraPreferences: { ...DEFAULT_ACCOUNT_SETTINGS.cameraPreferences, ...(settings.cameraPreferences || {}) },
+    controllerPreferences: { ...DEFAULT_ACCOUNT_SETTINGS.controllerPreferences, ...(settings.controllerPreferences || {}) },
     gamePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.gamePreferences, ...(settings.gamePreferences || {}) },
     other: settings.other || {},
   };
@@ -5806,15 +5825,12 @@ function applyAccountSettings(settings = {}) {
   musicVolume = Math.max(0, Math.min(100, Number(accountSettings.musicVolume))) / 100;
   soundEffectsVolume = Math.max(0, Math.min(100, Number(accountSettings.soundEffectsVolume))) / 100;
   soundOn = accountSettings.interfacePreferences.soundEnabled !== false;
-  cameraOn = accountSettings.cameraPreferences.follow !== false;
-  tiltOn = accountSettings.cameraPreferences.tilt !== false;
+  delete accountSettings.cameraPreferences;
+  window.MonopolyControllerSupport?.configure(accountSettings.controllerPreferences);
   if (bgMusic) bgMusic.volume = musicVolume * MAX_MUSIC_VOLUME;
   try { localStorage.removeItem('monopolyMusicVolume'); } catch (e) {}
   applySoundEffectsVolume();
   updateTopButtons();
-  const scene = $('scene');
-  if (scene) scene.classList.toggle('tilt', tiltOn), scene.classList.toggle('flat', !tiltOn);
-  if (!cameraOn) cameraReset(0);
   const musicSlider = $('volSlider');
   if (musicSlider) musicSlider.value = Math.round(musicVolume * 100);
 }
@@ -5822,12 +5838,12 @@ function applyAccountSettings(settings = {}) {
 function queueAccountSettings(changes) {
   if (!accountUser) return;
   const merged = { ...changes };
-  for (const key of ['interfacePreferences', 'cameraPreferences', 'gamePreferences', 'other']) {
+  for (const key of ['interfacePreferences', 'controllerPreferences', 'gamePreferences', 'other']) {
     if (changes[key]) merged[key] = { ...(accountSettings[key] || {}), ...changes[key] };
   }
   accountSettings = { ...accountSettings, ...merged };
   pendingAccountSettings = { ...pendingAccountSettings, ...merged };
-  for (const key of ['interfacePreferences', 'cameraPreferences', 'gamePreferences', 'other']) {
+  for (const key of ['interfacePreferences', 'controllerPreferences', 'gamePreferences', 'other']) {
     if (pendingAccountSettings[key]) pendingAccountSettings[key] = { ...(accountSettings[key] || {}), ...pendingAccountSettings[key] };
   }
   setAccountStatus('Saving account settings...');
@@ -5867,15 +5883,7 @@ function setAccountSound(enabled) {
   queueAccountSettings({ interfacePreferences: { soundEnabled: soundOn } });
 }
 
-function setAccountCamera(key, enabled) {
-  if (key === 'follow') cameraOn = enabled;
-  if (key === 'tilt') tiltOn = enabled;
-  const scene = $('scene');
-  if (scene) scene.classList.toggle('tilt', tiltOn), scene.classList.toggle('flat', !tiltOn);
-  if (!cameraOn) cameraReset(0);
-  updateTopButtons();
-  queueAccountSettings({ cameraPreferences: { follow: cameraOn, tilt: tiltOn } });
-}
+
 
 function accountPanelHTML() {
   if (!accountUser) return `<div class="panel acc-blue account-panel">
@@ -5899,7 +5907,6 @@ function accountPanelHTML() {
     ...DEFAULT_ACCOUNT_SETTINGS,
     ...accountSettings,
     interfacePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.interfacePreferences, ...(accountSettings.interfacePreferences || {}) },
-    cameraPreferences: { ...DEFAULT_ACCOUNT_SETTINGS.cameraPreferences, ...(accountSettings.cameraPreferences || {}) },
     gamePreferences: { ...DEFAULT_ACCOUNT_SETTINGS.gamePreferences, ...(accountSettings.gamePreferences || {}) },
   };
   const avatar = accountUser.avatar_url
@@ -5910,7 +5917,7 @@ function accountPanelHTML() {
     <div class="account-row">${avatar}<strong>${esc(accountUser.username)}</strong>
       <button class="btn alt" type="button" onclick="signOutAccount()" ${accountBusy ? 'disabled' : ''}>Sign out</button>
     </div>
-    <form class="account-fields" onsubmit="changeAccountUsername(event)">
+    <details class="profile-security"><summary>Account details</summary><form class="account-fields" onsubmit="changeAccountUsername(event)">
       <label class="muted" for="newAccountUsername">Change username</label>
       <div class="account-row"><input id="newAccountUsername" name="username" type="text" minlength="3" maxlength="24" pattern="[A-Za-z0-9_]+" value="${esc(accountUser.username)}" required>
         <button class="btn alt" type="submit" ${accountBusy ? 'disabled' : ''}>Update</button></div>
@@ -5926,14 +5933,12 @@ function accountPanelHTML() {
       <input name="newPassword" type="password" minlength="10" maxlength="72" autocomplete="new-password" placeholder="New password (10-72 bytes)" required>
       <button class="btn alt" type="submit" ${accountBusy ? 'disabled' : ''}>Update password</button>
     </form>
-    <div class="account-preferences">
+    </details><details class="profile-preferences"><summary>Settings</summary><div class="account-preferences">
       <label for="accountMusicVolume">Music volume<input id="accountMusicVolume" type="range" min="0" max="100" value="${Math.round(Number(settings.musicVolume))}" oninput="setMusicVolume(this.value)"></label>
       <label for="accountSfxVolume">Effects volume<input id="accountSfxVolume" type="range" min="0" max="100" value="${Math.round(Number(settings.soundEffectsVolume))}" oninput="setSoundEffectsVolume(this.value)"></label>
       <label for="accountSoundEnabled">Game sounds<input id="accountSoundEnabled" type="checkbox" ${settings.interfacePreferences.soundEnabled ? 'checked' : ''} onchange="setAccountSound(this.checked)"></label>
-      <label for="accountCameraFollow">Camera follow<input id="accountCameraFollow" type="checkbox" ${settings.cameraPreferences.follow ? 'checked' : ''} onchange="setAccountCamera('follow', this.checked)"></label>
-      <label for="accountCameraTilt">3D board view<input id="accountCameraTilt" type="checkbox" ${settings.cameraPreferences.tilt ? 'checked' : ''} onchange="setAccountCamera('tilt', this.checked)"></label>
     </div>
-    <p class="account-status" id="accountStatus" role="status">${esc(accountMessage)}</p>
+    ${controllerSettingsHTML()}</details><p class="account-status" id="accountStatus" role="status">${esc(accountMessage)}</p>
   </div>`;
 }
 
@@ -5951,6 +5956,7 @@ if (accountUser) {
       applyAccountSettings(accountUser.settings || {});
       startAccountPresence();
       await refreshBackendMyGames();
+      await discoverReconnectMatch();
     } else stopAccountPresence();
   } catch (error) {
     accountUser = null;
@@ -5971,6 +5977,7 @@ async function submitAccountAuth(event) {
     accountUser = result.user;
     applyAccountSettings(accountUser.settings || {});
     startAccountPresence();
+    await discoverReconnectMatch();
     accountMessage = 'Signed in. Settings are stored with your account.';
   } catch (error) {
     accountMessage = error.message;
@@ -5984,6 +5991,12 @@ async function signOutAccount() {
   if (accountBusy) return;
   accountBusy = true;
   try {
+    if (matchSessionGameId) {
+      await backendGameRequest('/api/game/connection', { method: 'POST', body: JSON.stringify({ gameId: matchSessionGameId, action: 'disconnect', sessionId: matchTabSession }) });
+      await clearActiveMatchUi();
+    }
+    reconnectMatch = null; clearInterval(reconnectRefreshTimer); reconnectRefreshTimer = null;
+    document.body.classList.remove('reconnect-priority');
     await accountRequest('/api/auth/signout', { method: 'POST', body: '{}' });
     accountUser = null;
     backendLobby = null;
@@ -6115,7 +6128,7 @@ function howToPlayHTML() {
         <li>Doubles give you another roll. Three doubles in a row sends you to jail.</li>
         <li>Passing GO pays ${fmt(game?.rules?.goSalary ?? GO_SALARY)}.</li>
         <li>If you owe more than you have, raise cash or go bankrupt. Last player left wins.</li>
-        <li>The top bar switches sound, camera zoom, and 3D or flat view.</li>
+        <li>Open Game Menu for players, friends, settings, and Save &amp; Quit.</li>
       </ol>
     </details>
   </div>`;
@@ -6124,6 +6137,7 @@ function howToPlayHTML() {
 function renderSetup() {
   // Lobby requests and menu callbacks may finish after the match has loaded.
   // They must never replace a multiplayer board with the setup screen.
+  if (typeof reconnectMatch !== 'undefined' && reconnectMatch) { renderReconnectScreen(); return; }
   if (game && ((window.authoritativeGame?.gameId && ['ACTIVE', 'FINISHED'].includes(window.authoritativeGame.status)) || net.role)) {
     if (!$('board')) attachGame();
     return;
@@ -6161,19 +6175,17 @@ function renderSetup() {
         <div class="row"><button class="btn alt" type="button" onclick="openBoardsScreen(false)">Custom boards</button></div>
         <p class="muted" style="margin-bottom:0">${esc(selectedHostBoard ? `Selected board: ${selectedHostBoard.name}` : 'Selected board: Classic board')}</p>
       </div>
-      <div class="panel acc-orange">
-        <h2>🎲 Play on one screen</h2>
+      <details class="panel acc-orange"><summary>🎲 Play on one screen</summary>
         <div class="muted">Pass the device around. How many players?</div>
         <div class="seg">${[2, 3, 4, 5, 6, 7, 8].map(n => `<button class="btn ${setup.count === n ? '' : 'alt'}" onclick="setCount(${n})">${n}</button>`).join('')}</div>
         ${inputs}
         <button class="btn" style="width:100%;margin-top:12px" onclick="startGame()">Start game</button>
-      </div>
+      </details>
       <div class="panel acc-red">
         <h2>🌐 Play online</h2>
         <div class="row">
           <button class="btn" onclick="backendCreateGame()">Create game</button>
           <button class="btn alt" onclick="openServerJoin()">Join game</button>
-          <button class="btn alt" onclick="openServerLobby()">My server games</button>
         </div>
       </div>
       ${howToPlayHTML()}
@@ -6184,6 +6196,7 @@ function renderSetup() {
 renderSetup();
 restoreAccountSession();
 </script>
+<script src="multiplayer-ui.js"></script>
 <script src="controller-support.js"></script>
 </body>
 </html>

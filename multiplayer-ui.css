@@ -1,0 +1,64 @@
+.setup { max-width: 760px; padding-top: 78px; }
+.setup .panel { border-radius: 18px; padding: 20px; margin-bottom: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.12); }
+.setup .sub { margin: 8px 0 24px; }
+.setup .panel h2 { font-size: 1.2rem; margin: 0 0 12px; }
+.btn { min-height: 44px; border-radius: 11px; padding: 10px 16px; }
+summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; font-weight: 700; }
+summary::before { content: '›'; transition: transform .16s; font-size: 1.3rem; }
+details[open] > summary::before { transform: rotate(90deg); }
+.profile-security, .profile-preferences { border-top: 1px solid var(--border); padding: 8px 0; margin-top: 16px; }
+.controller-settings { padding: 16px; margin: 16px 0; border: 1px solid var(--border); border-radius: 12px; }
+.controller-settings legend { font-weight: 800; }
+.controller-settings label { display: grid; gap: 8px; margin-bottom: 16px; font-weight: 600; }
+.controller-settings input, .controller-settings select { width: 100%; }
+.controller-settings p { font-size: .85rem; line-height: 1.5; margin-bottom: 0; }
+.game-menu-overlay { z-index: 510; }
+.game-menu-card { max-width: 440px; width: min(440px, 94vw); max-height: 88dvh; overflow-y: auto; background: var(--panel); color: var(--fg); }
+.game-menu-card .account-preferences { display: grid; gap: 14px; }
+.game-menu-card .account-preferences label { display: grid; gap: 8px; }
+.game-menu-card .account-preferences input[type='range'] { width: 100%; }
+.game-menu-card .account-preferences label:has(input[type='checkbox']) { display: flex; align-items: center; gap: 12px; }
+.game-menu-actions { display: grid; gap: 10px; }
+.game-menu-actions .btn { text-align: left; }
+.game-menu-secondary, .game-menu-destructive { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
+.game-menu-secondary .btn, .game-menu-destructive .btn { width: 100%; }
+.game-menu-secondary p { font-size: .85rem; margin: 10px 0 0; }
+.danger { color: var(--fg); border-color: #c54c57; }
+.connection-status { display: block; text-align: right; font-size: .78rem; font-weight: 650; margin-bottom: 8px; max-width: 210px; color: var(--page-fg); }
+.connection-status[data-status='reconnecting'], .connection-status[data-status='disconnected'] { color: var(--fg); background: var(--panel); padding: 6px 10px; border-radius: 8px; }
+.player-connection { display: block; color: var(--fg); background: var(--panel); padding: 2px 5px; border-radius: 5px; margin-top: 4px; font-size: .7rem; }
+.pill .pname:has(.player-connection) { white-space: normal; }
+.save-slot-count { font-weight: 800; font-size: .9rem; padding: 8px 12px; background: var(--btn-alt); border: 1px solid var(--border); border-radius: 10px; display: inline-block; }
+.reconnect-screen { min-height: 100dvh; padding: 32px 18px; display: grid; place-items: center; }
+.reconnect-card { width: min(560px, 100%); border: 1px solid var(--border); border-radius: 24px; padding: 28px; background: var(--panel); box-shadow: 0 16px 50px rgba(0,0,0,.25); }
+.reconnect-card h1 { font-size: clamp(1.5rem,4vw,2rem); line-height: 1.15; margin: 12px 0; }
+.menu-eyebrow { font-size: .75rem; letter-spacing: .1em; font-weight: 800; color: var(--muted); }
+.reconnect-board { display: grid; gap: 6px; padding: 16px; margin: 24px 0 10px; background: var(--btn-alt); border: 1px solid var(--border); border-radius: 12px; }
+.reconnect-board span { font-size: .8rem; color: var(--muted); }
+.reconnect-players { max-height: 280px; overflow-y: auto; }
+.reconnect-countdown { font-size: 1.25rem; font-weight: 800; margin: 24px 0 16px; }
+.reconnect-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.reconnect-priority .account-corner-buttons { display: none; }
+.friend-group h3 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+.friend-presence.online { color: var(--fg); }
+.friend-presence.online::before { content: '● '; color: #37b76b; }
+.save-file-options summary::before { display: none; }
+.save-file-options summary { font-size: 1.3rem; padding: 0 8px; }
+.save-file-options .btn { display: block; margin: 8px 0; }
+.setup:not(.account-corner-dialog):not(.board-editor) .setup-logo { width: min(100%, 300px); }
+.corner-friend-options summary::before { display: none; }
+.corner-friend-actions:empty { display: none; }
+.social-row { gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.social-row:last-child { border-bottom: 0; }
+.friend-profile { display: flex; align-items: center; gap: 14px; margin: 16px 0; }
+.account-notification { background: var(--panel); color: var(--fg); border-color: var(--border); }
+@media (max-width: 600px) {
+  .has-account-corner .setup:not(.account-corner-dialog) { margin-top: 12px; }
+  .setup { padding: 74px 14px 24px; }
+  .setup .panel { padding: 16px; }
+  .corner-tr { display: flex; align-items: center; gap: 8px; }
+  .connection-status { font-size: .7rem; margin: 0; max-width: 150px; }
+  .reconnect-card { padding: 20px; }
+  .reconnect-actions { grid-template-columns: 1fr; }
+  .reconnect-players { max-height: 220px; }
+}

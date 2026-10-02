@@ -1,5 +1,6 @@
 const { syncGameAvatars } = require('../../lib/game-profiles');
 const engine = require('../../game-engine.js');
+const { maintainConnections, publicConnections } = require('../../lib/game-connections');
 const { database, noStore, requireAccount } = require('../../lib/account');
 
 function err(code, message, status = 400) {
@@ -13,6 +14,7 @@ function normalizeGameId(gameId) {
 
 function redactStateForAccount(state, accountId) {
   const copy = engine.cloneState(state);
+  delete copy.connections;
   if (copy.trade && copy.trade.from !== undefined && copy.trade.to !== undefined &&
       copy.players[copy.trade.from]?.accountId !== accountId && copy.players[copy.trade.to]?.accountId !== accountId) {
     copy.trade = null;
@@ -31,7 +33,7 @@ function redactEventsForAccount(events, state, accountId) {
   ].includes(event.type));
 }
 
-async function getGameState({ account, gameId, sinceVersion = null, sinceStatus = null, db = database() }) {
+async function getGameState({ account, gameId, sinceVersion = null, sinceStatus = null, db = database(), maintained = false }) {
   if (!account || !account.id) {
     return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   }
@@ -54,6 +56,8 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
   const rows = await db`
     SELECT
       g.status,
+      g.host_account_id,
+      gs.state -> 'connections' AS connections,
       EXISTS (
         SELECT 1
         FROM game_players gp
@@ -94,6 +98,14 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
   if (!row.is_member) {
     return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
   }
+  const connections = typeof row.connections === 'string' ? JSON.parse(row.connections) : row.connections;
+  const now = Date.now();
+  if (!maintained && ['ACTIVE', 'PAUSED'].includes(row.status) && (!connections || Object.values(connections.players).some(connection =>
+    (row.status === 'ACTIVE' && connection.status === 'connected' && connection.leaseUntil <= now) ||
+    (connection.status === 'reconnecting' && connection.reconnectUntil <= now)))) {
+    await maintainConnections(db, normalizedGameId);
+    return getGameState({ account, gameId, sinceVersion, sinceStatus, db, maintained: true });
+  }
   if (row.version == null) {
     return err('GAME_NOT_FOUND', 'Game state not found.', 404);
   }
@@ -107,6 +119,8 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
       status: row.status,
       version,
       unchanged: true,
+      hostAccountId: row.host_account_id,
+      connection: connections?.players[account.id]?.status || 'connected',
     };
   }
 
@@ -120,6 +134,7 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
       status: row.status,
       version,
       unchanged: false,
+      hostAccountId: row.host_account_id,
     };
   }
   if (row.state == null) {
@@ -147,6 +162,10 @@ async function getGameState({ account, gameId, sinceVersion = null, sinceStatus 
     state: visibleState,
     events: redactEventsForAccount(events, state, account.id),
     board: row.board || {},
+    hostAccountId: row.host_account_id,
+    connection: connections?.players[account.id]?.status || 'connected',
+    presence: publicConnections(state, { host_account_id: row.host_account_id }),
+    serverTime: now,
   };
 }
 
@@ -188,6 +207,10 @@ async function handleGetGameStateRoute(req, res, deps = {}) {
     state: result.state,
     events: result.events,
     board: result.board,
+    hostAccountId: result.hostAccountId,
+    connection: result.connection,
+    presence: result.presence,
+    serverTime: result.serverTime,
   });
 }
 

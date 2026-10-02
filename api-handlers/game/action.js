@@ -4,6 +4,7 @@ const boardData = require('../../game-board.js');
 const cardData = require('../../game-cards.js');
 const { database, noStore, parseBody, requireAccount } = require('../../lib/account');
 const { persistFinalResultsIfNeeded } = require('../../lib/game-results.js');
+const { waitingForPlayer, publicConnections, connectionsDue, reconcileConnections, persistConnections } = require('../../lib/game-connections');
 
 function statusForError(code) {
   switch (code) {
@@ -47,6 +48,7 @@ const ACTION_TIMER_MS = 75 * 1000;
 
 function redactTradeState(state, accountId) {
   const copy = engine.cloneState(state);
+  delete copy.connections;
   if (copy.trade && copy.trade.from !== undefined && copy.trade.to !== undefined &&
       copy.players[copy.trade.from]?.accountId !== accountId && copy.players[copy.trade.to]?.accountId !== accountId) {
     copy.trade = null;
@@ -175,19 +177,17 @@ async function executeGameAction({
       if (!row) {
         return { ok: false, error: { code: 'GAME_NOT_FOUND', message: 'Game not found.' } };
       }
-      const game = { status: row.status, host_account_id: row.host_account_id };
-      if (requestId) {
-        const existingRows = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
-        if (existingRows && existingRows[0] && existingRows[0].result_json) {
-          return parseStoredResult(existingRows[0].result_json);
-        }
-      }
-      if (game.status !== 'ACTIVE') {
-        return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'This match is not active.' } };
-      }
+      const game = { id: gameId, status: row.status, host_account_id: row.host_account_id };
 
-      const currentVersion = Number(row.version) || 1;
+      let currentVersion = Number(row.version) || 1;
       const state = engine.deserializeState(row.state);
+      if (connectionsDue(state, game.status)) {
+        const members = await tx`SELECT * FROM game_players WHERE game_id = ${gameId} ORDER BY seat_index ASC`;
+        const oldHost = game.host_account_id;
+        const connectionResult = reconcileConnections(state, game, members);
+        const stored = await persistConnections(tx, game, row, state, members, connectionResult, oldHost);
+        currentVersion = Number(stored.version);
+      }
       await syncGameAvatars(tx, state);
       if (action.type === 'SET_PAUSE' || action.type === 'GAME_TICK') {
         if (game.host_account_id !== account.id) {
@@ -197,8 +197,21 @@ async function executeGameAction({
       const boardState = row.board && typeof row.board === 'object' ? row.board : {};
       const spaces = Array.isArray(boardState.spaces) ? boardState.spaces : boardData.spaces;
       const actingPlayer = state.players.find(player => player.accountId === account.id);
-      if (!actingPlayer) {
+      if (!actingPlayer || actingPlayer.removed) {
         return { ok: false, error: { code: 'PLAYER_NOT_IN_GAME', message: 'You are not a player in this game.' } };
+      }
+      if (state.connections?.players[account.id]?.status === 'reconnecting') {
+        return { ok: false, error: { code: 'RECONNECT_REQUIRED', message: 'Rejoin the match before taking an action.' } };
+      }
+      if (requestId) {
+        const existingRows = await tx`SELECT result_json FROM game_action_requests WHERE game_id = ${gameId} AND request_id = ${requestId}`;
+        if (existingRows[0]?.result_json) return parseStoredResult(existingRows[0].result_json);
+      }
+      if (game.status !== 'ACTIVE') {
+        return { ok: false, error: { code: 'GAME_NOT_ACTIVE', message: 'This match is not active.' } };
+      }
+      if (action.type === 'GAME_TICK' && waitingForPlayer(state)) {
+        return { ok: true, gameId, version: currentVersion, status: 'ACTIVE', state, events: [] };
       }
 
       if (version !== currentVersion) {
@@ -227,7 +240,7 @@ async function executeGameAction({
           return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'A valid trade recipient is required.' } };
         }
         const recipient = state.players[Number(trade.to)];
-        if (!recipient || recipient.bankrupt) {
+        if (!recipient || recipient.bankrupt || state.connections?.players[recipient.accountId]?.status === 'reconnecting') {
           return { ok: false, error: { code: 'ILLEGAL_ACTION', message: 'That player cannot receive a trade.' } };
         }
         state.trade = {
@@ -301,6 +314,8 @@ async function executeGameAction({
         status: resolved.state.over ? 'FINISHED' : 'ACTIVE',
         state: resolved.state,
         events: resolved.events,
+        hostAccountId: game.host_account_id,
+        presence: publicConnections(resolved.state, game),
       };
 
       await tx`UPDATE game_states
@@ -373,6 +388,8 @@ async function handleGameAction(req, res, deps = {}) {
       status: result.status || 'ACTIVE',
       state: redactTradeState(result.state, account.id),
       events: result.events,
+      hostAccountId: result.hostAccountId,
+      presence: result.presence,
     });
   } catch (error) {
     console.error('Game action API failed:', error);

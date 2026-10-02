@@ -4,6 +4,19 @@ const engine = require('../../game-engine.js');
 const boardData = require('../../game-board.js');
 const { database, noStore, parseBody, requireAccount } = require('../../lib/account');
 const { cleanupExpiredFinishedGames, deleteGameRecords } = require('../../lib/game-results.js');
+const { initializeConnections, maintainConnections, cancelPausedReconnect } = require('../../lib/game-connections');
+const { lockSaveOwner, trimSaveSlots } = require('../../lib/save-slots');
+
+async function requireReturnInvitation(tx, game, account, membership) {
+  if (game.host_account_id === account.id || membership?.returned_at) return null;
+  const invitations = await tx`SELECT id, status FROM game_invitations
+    WHERE game_id = ${game.id} AND invitee_account_id = ${account.id}
+      AND status IN ('pending', 'accepted') FOR UPDATE`;
+  if (!invitations[0]) return err('INVITATION_REQUIRED', 'Wait for the host to load the save and invite you.', 403);
+  if (invitations[0].status === 'pending') await tx`UPDATE game_invitations SET status = ${'accepted'}, responded_at = now()
+    WHERE id = ${invitations[0].id} AND status = 'pending'`;
+  return null;
+}
 
 function err(code, message, status = 400) {
   return { ok: false, status, error: { code, message } };
@@ -97,6 +110,7 @@ async function joinGame({ account, gameId, db = database() }) {
   if (!normalizedGameId) {
     return err('INVALID_GAME_ID', 'A valid gameId is required.', 400);
   }
+  await maintainConnections(db, normalizedGameId);
 
   return db.begin(async tx => {
     const games = await tx`SELECT * FROM games WHERE id = ${normalizedGameId} FOR UPDATE`;
@@ -110,6 +124,9 @@ async function joinGame({ account, gameId, db = database() }) {
       if (!already[0]) {
         return err('ORIGINAL_PLAYER_REQUIRED', 'Only an original player in this match can return.', 403);
       }
+      const invitationError = await requireReturnInvitation(tx, game, account, already[0]);
+      if (invitationError) return invitationError;
+      await cancelPausedReconnect(tx, normalizedGameId, account.id);
       if (!already[0].returned_at) {
         await tx`UPDATE game_players SET returned_at = now() WHERE game_id = ${normalizedGameId} AND account_id = ${account.id}`;
       }
@@ -142,6 +159,8 @@ async function joinGame({ account, gameId, db = database() }) {
       if (!already[0]) {
         return err('NOT_ORIGINAL_PLAYER', 'Only the original players from this save can return to it.', 403);
       }
+      const invitationError = await requireReturnInvitation(tx, game, account, already[0]);
+      if (invitationError) return invitationError;
       if (!already[0].returned_at) {
         await tx`UPDATE game_players SET returned_at = now() WHERE game_id = ${normalizedGameId} AND account_id = ${account.id}`;
       }
@@ -334,6 +353,11 @@ async function startGame({ account, gameId, db = database() }) {
       cardDecks = board.card_decks;
     }
     let state = engine.createState({ names, accountIds, avatarUrls: players.map(player => player.avatar_url), boardSize: boardData.spaces.length, boardNames, cardDecks });
+    initializeConnections(state);
+    if (game.selected_board_id) {
+      const boards = await tx`SELECT name FROM custom_boards WHERE id = ${game.selected_board_id}`;
+      state.boardName = boards[0]?.name || 'Custom board';
+    } else state.boardName = 'Classic board';
 
     // Match the original game's start flow, but choose the order on the
     // authoritative server so every browser receives the exact same result.
@@ -380,6 +404,7 @@ async function pauseGame({ account, gameId, expectedVersion, db = database() }) 
   const normalizedGameId = normalizeGameId(gameId);
   if (!normalizedGameId) return err('INVALID_GAME_ID', 'A valid gameId is required.', 400);
 
+  await maintainConnections(db, normalizedGameId);
   return db.begin(async tx => {
     const games = await tx`SELECT * FROM games WHERE id = ${normalizedGameId} FOR UPDATE`;
     const game = games[0];
@@ -400,24 +425,26 @@ async function pauseGame({ account, gameId, expectedVersion, db = database() }) 
     }
 
     const state = engine.deserializeState(stateRow.state);
-    if (state.over || state.players.length !== memberships.length ||
-        state.players.some((player, seatIndex) => player.accountId !== memberships[seatIndex].account_id || player.id !== Number(memberships[seatIndex].seat_index))) {
+    const remaining = state.players.filter(player => !player.removed);
+    if (state.over || remaining.length !== memberships.length ||
+        remaining.some(player => !memberships.some(member => member.account_id === player.accountId && Number(member.seat_index) === player.id))) {
       return err('PLAYER_ROSTER_MISMATCH', 'The authoritative state does not match the original player seats.', 409);
     }
 
     // The first Save & Quit creates the only save slot for this match.
     // Later pauses update it, preserving any name the host has chosen.
+    await lockSaveOwner(tx, account.id);
     const saved = await tx`SELECT id, name FROM game_saves
       WHERE source_game_id = ${normalizedGameId} AND owner_id = ${account.id}
       ORDER BY updated_at DESC LIMIT 1 FOR UPDATE`;
     const saveId = saved[0]?.id || randomUUID();
-    const names = state.players.map(player => player.name);
+    const names = remaining.map(player => player.name);
     const fullName = `(${names.join(', ')})`;
     const nameBudget = Math.floor((78 - (names.length - 1) * 2) / names.length);
     const defaultName = fullName.length <= 80 ? fullName
       : `(${names.map(name => name.length > nameBudget ? name.slice(0, nameBudget - 1) + '…' : name).join(', ')})`;
     const saveName = saved[0]?.name && saved[0].name !== 'Server game' ? saved[0].name : defaultName;
-    const metadata = state.players.map(player => ({
+    const metadata = remaining.map(player => ({
       accountId: player.accountId, seatIndex: player.id,
       username: player.name, avatarUrl: player.avatarUrl || null,
     }));
@@ -427,6 +454,15 @@ async function pauseGame({ account, gameId, expectedVersion, db = database() }) 
       await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
         VALUES (${saveId}, ${account.id}, ${normalizedGameId}, ${saveName}, ${'SAVED'}, ${version}, ${JSON.stringify(state)}::jsonb, ${JSON.stringify(stateRow.board || {})}::jsonb, ${JSON.stringify(metadata)}::jsonb, ${game.selected_board_id || null})`;
     }
+
+    await trimSaveSlots(tx, account.id);
+    // Online players are going to a saved lobby, so their leases no longer
+    // run. An already disconnected player's original deadline still applies.
+    for (const connection of Object.values(state.connections?.players || {})) {
+      if (connection.status === 'connected') { connection.status = 'paused'; connection.sessions = {}; }
+    }
+    await tx`UPDATE game_states SET state = ${JSON.stringify(state)}::jsonb, version = ${version}, updated_at = now() WHERE id = ${normalizedGameId}`;
+    await tx`DELETE FROM game_invitations WHERE game_id = ${normalizedGameId}`;
 
     await tx`UPDATE game_players SET returned_at = NULL WHERE game_id = ${normalizedGameId}`;
     await tx`UPDATE games SET status = ${'PAUSED'}, paused_at = now(), updated_at = now()
@@ -453,6 +489,7 @@ async function getLobby({ account, gameId, db = database() }) {
     return err('INVALID_GAME_ID', 'A valid gameId is required.', 400);
   }
 
+  await maintainConnections(db, normalizedGameId);
   const games = await db.begin(async tx => {
     const rows = await tx`SELECT * FROM games WHERE id = ${normalizedGameId}`;
     const game = rows[0];
@@ -463,6 +500,9 @@ async function getLobby({ account, gameId, db = database() }) {
     const membership = await tx`SELECT * FROM game_players WHERE game_id = ${normalizedGameId} AND account_id = ${account.id}`;
     if (!membership[0]) {
       return err('NOT_IN_GAME', 'You are not a member of this game.', 403);
+    }
+    if ((game.status === 'PAUSED' || game.resume_save_id) && game.host_account_id !== account.id && !membership[0].returned_at) {
+      return err('INVITATION_REQUIRED', 'Wait for the host to invite you back to the saved match.', 403);
     }
 
     const players = await tx`SELECT gp.game_id, gp.account_id, gp.seat_index, gp.joined_at, gp.returned_at, a.username, a.avatar_url
@@ -477,15 +517,13 @@ async function getLobby({ account, gameId, db = database() }) {
     // original seat's returned_at to be set. Neither the client nor this
     // flag is ever trusted to gate the actual transition -- startGame and
     // resumeGame re-check these conditions themselves.
+    const finishedSnapshot = game.resume_save_id ? (await tx`SELECT state ->> 'over' AS game_over FROM game_states WHERE id = ${normalizedGameId}`)[0]?.game_over === 'true' : false;
     const canStart = game.status === 'WAITING' && game.host_account_id === account.id && (
       game.resume_save_id
-        ? players.length >= 2 && players.every(player => player.returned_at)
+        ? (players.length >= 2 || finishedSnapshot) && players.every(player => player.returned_at)
         : players.length >= 2
     );
-    // Viewing a paused lobby counts as this original player returning.
-    // This makes reconnect idempotent and avoids a stale "Missing" flag when
-    // the account opens the paused match through Load/Refresh instead of Join.
-    if (game.status === 'PAUSED' && !membership[0].returned_at) {
+    if (game.status === 'PAUSED' && game.host_account_id === account.id && !membership[0].returned_at) {
       await tx`UPDATE game_players SET returned_at = now()
         WHERE game_id = ${normalizedGameId} AND account_id = ${account.id} AND returned_at IS NULL`;
       const ownPlayer = players.find(player => player.account_id === account.id);
@@ -513,15 +551,21 @@ async function getMyGames({ account, db = database() }) {
     return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   }
 
+  // Sweep only this account's matches. Deadlines are checked on every read,
+  // even when no browser remained open to poll the match at expiry.
+  const memberships = await db`SELECT g.id FROM games g JOIN game_players gp ON gp.game_id = g.id
+    WHERE gp.account_id = ${account.id} AND g.status IN ('ACTIVE', 'PAUSED')`;
+  for (const game of memberships) await maintainConnections(db, game.id);
   const rows = await db.begin(async tx => {
     await cleanupExpiredFinishedGames(tx);
-    const games = await tx`SELECT g.*, gp.account_id, gp.seat_index
+    const games = await tx`SELECT g.*, gp.account_id, gp.seat_index, gp.returned_at
       FROM game_players gp
       JOIN games g ON g.id = gp.game_id
       WHERE gp.account_id = ${account.id}
       ORDER BY g.updated_at DESC`;
 
-    return games.map(game => ({
+    return games.filter(game => game.host_account_id === account.id ||
+      (game.status !== 'PAUSED' && (!game.resume_save_id || game.returned_at))).map(game => ({
       gameId: game.id,
       hostAccountId: game.host_account_id,
       name: game.name || 'Server game',

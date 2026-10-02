@@ -32,21 +32,34 @@ module.exports = async function socialSnapshot(req, res, deps = {}) {
               'id', a.id,
               'username', a.username,
               'avatar_url', a.avatar_url,
+              'currentGame', (
+                SELECT jsonb_build_object('gameId', g.id, 'name', g.name, 'status', g.status)
+                FROM game_players gp JOIN games g ON g.id = gp.game_id
+                WHERE gp.account_id = a.id AND g.status IN ('WAITING', 'ACTIVE')
+                ORDER BY g.updated_at DESC LIMIT 1
+              ),
               'joinableGame', (
                 SELECT jsonb_build_object('gameId', g.id, 'name', g.name)
                 FROM game_players friend_seat
                 JOIN games g ON g.id = friend_seat.game_id
-                WHERE friend_seat.account_id = a.id AND g.status = 'WAITING'
+                WHERE friend_seat.account_id = a.id AND g.status IN ('WAITING', 'PAUSED')
                   AND (
-                    EXISTS (SELECT 1 FROM game_players me WHERE me.game_id = g.id AND me.account_id = ${account.id})
-                    OR (
-                      g.resume_save_id IS NULL
+                    g.host_account_id = ${account.id} OR (
+                      g.status = 'WAITING'
+                      AND g.resume_save_id IS NULL
                       AND (SELECT COUNT(*) FROM game_players seats WHERE seats.game_id = g.id) < 8
                       AND (NOT g.invite_only OR EXISTS (
                         SELECT 1 FROM game_invitations invitation
                         WHERE invitation.game_id = g.id AND invitation.invitee_account_id = ${account.id}
                           AND invitation.status IN ('pending', 'accepted')
                       ))
+                    ) OR EXISTS (
+                      SELECT 1 FROM game_invitations invitation
+                      WHERE invitation.game_id = g.id AND invitation.invitee_account_id = ${account.id}
+                        AND invitation.status IN ('pending', 'accepted')
+                        AND (g.status = 'WAITING' AND g.resume_save_id IS NULL OR EXISTS (
+                          SELECT 1 FROM game_players me WHERE me.game_id = g.id AND me.account_id = ${account.id}
+                        ))
                     )
                   )
                 ORDER BY g.updated_at DESC LIMIT 1
@@ -97,6 +110,8 @@ module.exports = async function socialSnapshot(req, res, deps = {}) {
               'hostUsername', host.username,
               'inviteeUsername', target.username,
               'gameStatus', g.status,
+              'gameName', g.name,
+              'boardName', COALESCE(b.name, 'Classic board'),
               'playerCount', (SELECT COUNT(*)::int FROM game_players gp WHERE gp.game_id = g.id),
               'createdAt', i.created_at
             )
@@ -106,8 +121,9 @@ module.exports = async function socialSnapshot(req, res, deps = {}) {
           JOIN games g ON g.id = i.game_id
           JOIN accounts host ON host.id = g.host_account_id
           JOIN accounts target ON target.id = i.invitee_account_id
+          LEFT JOIN custom_boards b ON b.id = g.selected_board_id
           WHERE i.status = 'pending'
-            AND g.status = 'WAITING'
+            AND g.status IN ('WAITING', 'PAUSED')
             AND (i.invitee_account_id = ${account.id} OR i.inviter_account_id = ${account.id})
         ), '[]'::jsonb) AS invitations
     `;

@@ -2,7 +2,7 @@ const { database, noStore, parseBody, requireAccount, requireMethod, requireSame
 
 const SETTING_KEYS = new Set([
   'musicVolume', 'soundEffectsVolume', 'gamePreferences',
-  'interfacePreferences', 'cameraPreferences', 'other',
+  'interfacePreferences', 'controllerPreferences', 'other',
 ]);
 
 module.exports = async function settings(req, res) {
@@ -28,6 +28,14 @@ module.exports = async function settings(req, res) {
       }
     }
     const merged = { ...(account.settings || {}), ...settings };
+    delete merged.cameraPreferences;
+    if (merged.controllerPreferences) {
+      const prefs = merged.controllerPreferences;
+      if (!['focus', 'mouse'].includes(prefs.mode) || !Number.isFinite(prefs.sensitivity) ||
+          prefs.sensitivity < .4 || prefs.sensitivity > 2.5 || !Number.isFinite(prefs.deadzone) || prefs.deadzone < .1 || prefs.deadzone > .4) {
+        return sendError(res, 400, 'Controller settings are invalid.');
+      }
+    }
     const serialized = JSON.stringify(merged);
     if (Buffer.byteLength(serialized, 'utf8') > 16384) return sendError(res, 413, 'Settings payload is too large.');
     const rows = await database()`UPDATE accounts SET settings = ${serialized}::jsonb, updated_at = now()
