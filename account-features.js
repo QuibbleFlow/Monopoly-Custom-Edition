@@ -3,18 +3,152 @@ const friendsScreenState = { friends: [], requests: [], results: [], status: '',
 const boardsScreenState = { boards: [], friends: [], status: '', editor: null, sharingBoardId: null, selectingForHost: false };
 let accountPresenceTimer = null;
 let friendsRefreshTimer = null;
+let accountNotificationTimer = null;
+let accountNotificationPollInFlight = false;
+const seenFriendRequestNotifications = new Set();
+const seenGameInvitationNotifications = new Set();
 
 function startAccountPresence() {
   clearInterval(accountPresenceTimer);
+  clearInterval(accountNotificationTimer);
   if (!accountUser) return;
   const heartbeat = () => accountRequest('/api/auth/session').catch(() => {});
   heartbeat();
   accountPresenceTimer = setInterval(heartbeat, 45000);
+  pollAccountNotifications();
+  accountNotificationTimer = setInterval(pollAccountNotifications, 4000);
 }
 
 function stopAccountPresence() {
   clearInterval(accountPresenceTimer);
+  clearInterval(accountNotificationTimer);
   accountPresenceTimer = null;
+  accountNotificationTimer = null;
+  accountNotificationPollInFlight = false;
+}
+
+function accountNotificationDomId(key) {
+  return 'account-notification-' + String(key).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+function dismissAccountNotification(key) {
+  const element = document.getElementById(accountNotificationDomId(key));
+  if (element) element.remove();
+}
+
+function ensureAccountNotificationTray() {
+  let tray = document.getElementById('accountNotificationTray');
+  if (tray) return tray;
+  tray = document.createElement('div');
+  tray.id = 'accountNotificationTray';
+  tray.className = 'account-notification-tray';
+  tray.setAttribute('aria-live', 'polite');
+  tray.setAttribute('aria-label', 'Notifications');
+  document.body.appendChild(tray);
+  return tray;
+}
+
+function showAccountNotification({ key, title, message, actions = [] }) {
+  if (!key || document.getElementById(accountNotificationDomId(key))) return;
+  const tray = ensureAccountNotificationTray();
+  const card = document.createElement('div');
+  card.id = accountNotificationDomId(key);
+  card.className = 'account-notification';
+
+  const head = document.createElement('div');
+  head.className = 'account-notification-head';
+  const heading = document.createElement('div');
+  heading.className = 'account-notification-title';
+  heading.textContent = title;
+  const close = document.createElement('button');
+  close.className = 'account-notification-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.textContent = '×';
+  close.addEventListener('click', () => dismissAccountNotification(key));
+  head.append(heading, close);
+
+  const body = document.createElement('div');
+  body.className = 'account-notification-message';
+  body.textContent = message;
+  card.append(head, body);
+
+  if (actions.length) {
+    const actionRow = document.createElement('div');
+    actionRow.className = 'account-notification-actions';
+    for (const action of actions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = action.primary ? 'btn' : 'btn alt';
+      button.textContent = action.label;
+      button.addEventListener('click', async () => {
+        if (button.disabled) return;
+        Array.from(actionRow.querySelectorAll('button')).forEach(item => { item.disabled = true; });
+        try {
+          await action.run();
+          dismissAccountNotification(key);
+        } catch (error) {
+          Array.from(actionRow.querySelectorAll('button')).forEach(item => { item.disabled = false; });
+        }
+      });
+      actionRow.appendChild(button);
+    }
+    card.appendChild(actionRow);
+  }
+
+  tray.prepend(card);
+  while (tray.children.length > 4) tray.lastElementChild.remove();
+}
+
+async function pollAccountNotifications() {
+  if (!accountUser || accountNotificationPollInFlight || document.visibilityState === 'hidden') return;
+  accountNotificationPollInFlight = true;
+  try {
+    const [friendResult, gameResult] = await Promise.all([
+      accountRequest('/api/friends/requests'),
+      accountRequest('/api/game/invitations'),
+    ]);
+    const requests = Array.isArray(friendResult.requests) ? friendResult.requests : [];
+    const invitations = Array.isArray(gameResult.invitations) ? gameResult.invitations : [];
+
+    friendsScreenState.requests = requests;
+    if (typeof backendGameInvitations !== 'undefined') backendGameInvitations = invitations;
+
+    for (const request of requests.filter(item => item.direction === 'incoming')) {
+      const key = 'friend:' + request.id;
+      if (seenFriendRequestNotifications.has(key)) continue;
+      seenFriendRequestNotifications.add(key);
+      showAccountNotification({
+        key,
+        title: 'Friend request',
+        message: `${request.username} sent you a friend request.`,
+        actions: [
+          { label: 'Accept', primary: true, run: () => decideFriendRequest(request.id, 'accept') },
+          { label: 'Decline', run: () => decideFriendRequest(request.id, 'decline') },
+        ],
+      });
+    }
+
+    for (const invitation of invitations.filter(item => item.direction === 'incoming')) {
+      const key = 'game:' + invitation.invitationId;
+      if (seenGameInvitationNotifications.has(key)) continue;
+      seenGameInvitationNotifications.add(key);
+      showAccountNotification({
+        key,
+        title: 'Game invitation',
+        message: `${invitation.hostUsername} invited you to join a match (${Number(invitation.playerCount)}/8 players).`,
+        actions: [
+          { label: 'Accept', primary: true, run: () => backendRespondToInvitation(invitation.invitationId, 'accept') },
+          { label: 'Decline', run: () => backendRespondToInvitation(invitation.invitationId, 'decline') },
+        ],
+      });
+    }
+  } catch (error) {
+    // Notifications are background UX. Existing friends/game screens still
+    // surface request errors without spamming the player during gameplay.
+  } finally {
+    accountNotificationPollInFlight = false;
+  }
 }
 
 function socialAvatar(user) {
