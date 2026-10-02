@@ -193,7 +193,16 @@ async function resumeGame({ account, gameId, db = database() }) {
     await tx`INSERT INTO game_states (id, owner_id, state, board, version)
       VALUES (${normalizedGameId}, ${account.id}, ${JSON.stringify(checked.state)}::jsonb, ${JSON.stringify(board)}::jsonb, ${Number(save.version)})
       ON CONFLICT (id) DO UPDATE SET owner_id = EXCLUDED.owner_id, state = EXCLUDED.state, board = EXCLUDED.board, version = EXCLUDED.version, updated_at = now()`;
-    await tx`UPDATE games SET status = ${checked.state.over ? 'FINISHED' : 'ACTIVE'}, started_at = COALESCE(started_at, now()), updated_at = now() WHERE id = ${normalizedGameId}`;
+    await tx`UPDATE games
+      SET status = ${checked.state.over ? 'FINISHED' : 'ACTIVE'}, resume_save_id = NULL,
+          started_at = COALESCE(started_at, now()), updated_at = now()
+      WHERE id = ${normalizedGameId}`;
+    // The resumed match continues using the same save slot. Clearing
+    // resume_save_id makes later Save & Quit / Continue cycles behave like
+    // a normal active match instead of getting stuck as a resume lobby.
+    await tx`UPDATE game_saves
+      SET source_game_id = ${normalizedGameId}, status = ${'SAVED'}, updated_at = now()
+      WHERE id = ${game.resume_save_id} AND owner_id = ${account.id}`;
     // Covers the edge case of resuming a save taken after the game had
     // already ended: derives FINISHED/results from the restored state
     // itself, and is a no-op (via ON CONFLICT DO NOTHING) if a result row
