@@ -2857,7 +2857,12 @@ const CHECK_ICON = '<svg viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5" fill="
 const X_ICON = '<svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5L5 19" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/></svg>';
 
 // Permanent structure: top bar, HUD, the 3D scene, shelf, side column.
+let cellRenderCache = Array(BOARD_SIZE).fill(null);
+
 function buildShell() {
+  // The shell is brand new, so no cell can reuse markup cached from the
+  // previous DOM tree.
+  cellRenderCache = Array(BOARD_SIZE).fill(null);
   let cells = '';
   for (let i = 0; i < BOARD_SIZE; i++) {
     const [r, c] = gridPos(i);
@@ -2938,8 +2943,10 @@ function confirmNew() {                 // two clicks so nobody restarts by acci
 // Refreshes the text inside each of the 40 squares.
 function renderCells() {
   const focusSq = ui.manage ? manageSquare() : ui.peek;
+  const needsFit = [];
   for (let i = 0; i < BOARD_SIZE; i++) {
     const s = { ...SPACES[i], name: spaceLabel(i) }, el = $('cell' + i), owner = game.owners[i];
+    if (!el) continue;
     let inner = '';
     if (s.type === 'property') {
       const h = game.houses[i], grew = prevHouses && h > prevHouses[i];
@@ -2961,15 +2968,26 @@ function renderCells() {
       inner += `<div class="owner-strip ${isNew ? 'fresh' : ''}" style="background:${oColor}"></div>`;
       inner += `<div class="owner-badge ${isNew ? 'fresh' : ''}" style="background:${oColor};color:${inkFor(oColor)}" title="Owned by ${esc(game.players[owner].name)}">${oInitial}</div>`;
     }
-    el.innerHTML = `<div class="cell-in" style="transform:translate(-50%,-50%) rotate(${cellRot(i)}deg)">${inner}</div>`;
+
+    const markup = `<div class="cell-in" style="transform:translate(-50%,-50%) rotate(${cellRot(i)}deg)">${inner}</div>`;
+    // Most actions do not alter 39 or 40 board squares. Replacing every
+    // square's innerHTML and measuring all names on every server update was
+    // forcing a large layout/reflow burst. Only rebuild squares whose visual
+    // markup actually changed.
+    if (cellRenderCache[i] !== markup) {
+      cellRenderCache[i] = markup;
+      el.innerHTML = markup;
+      needsFit.push(i);
+    }
     el.classList.toggle('selected', focusSq === i);
     el.classList.toggle('is-mortgaged', !!game.mortgaged[i]);
     el.classList.toggle('owned', owner !== null);
     el.style.setProperty('--owner-color', owner !== null ? game.players[owner].color : 'transparent');
-    el.setAttribute('aria-label', s.name);
+    if (el.getAttribute('aria-label') !== s.name) el.setAttribute('aria-label', s.name);
   }
-  prevOwners = game.owners.slice(); prevHouses = game.houses.slice();
-  fitCellNames();
+  prevOwners = game.owners.slice();
+  prevHouses = game.houses.slice();
+  if (needsFit.length) fitCellNames(needsFit);
 }
 
 // For each square independently: start its name at full size, then only
@@ -2977,9 +2995,10 @@ function renderCells() {
 // actually fits the square -- never touching any other square. This means
 // a long custom property name shrinks just enough to fit, while every
 // normal-length name (the vast majority) stays at full, readable size.
-function fitCellNames() {
+function fitCellNames(indices = null) {
   const overflows = (cin) => cin.scrollHeight > cin.clientHeight + 1 || cin.scrollWidth > cin.clientWidth + 1;
-  for (let i = 0; i < BOARD_SIZE; i++) {
+  const targets = Array.isArray(indices) ? indices : Array.from({ length: BOARD_SIZE }, (_, i) => i);
+  for (const i of targets) {
     const el = $('cell' + i);
     if (!el) continue;
     const cin = el.querySelector('.cell-in');
