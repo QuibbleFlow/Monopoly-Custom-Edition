@@ -8,7 +8,7 @@
   const requestTimeout = deps.setTimeout || root.setTimeout?.bind(root) || setTimeout;
   const clearRequestTimeout = deps.clearTimeout || root.clearTimeout?.bind(root) || clearTimeout;
   const stateListeners = new Set();
-  const pollInterval = deps.pollInterval || 200;
+  const pollInterval = deps.pollInterval || 500;
   let requestCounter = 0;
   let pollingTimer = null;
   let pollingGameId = null;
@@ -115,14 +115,20 @@
     async fetchLatest(gameId = this.gameId, options = {}) {
       if (!gameId || !fetchRequest) return null;
       const requestGeneration = options.generation == null ? generation : options.generation;
-      const response = await fetchRequest(`/api/game/state?gameId=${encodeURIComponent(gameId)}`, {
+      const params = new URLSearchParams({ gameId: String(gameId) });
+      if (this.gameId === gameId && Number.isInteger(this.version) && this.version > 0 && this.status) {
+        params.set('sinceVersion', String(this.version));
+        params.set('sinceStatus', String(this.status));
+      }
+      const response = await fetchRequest(`/api/game/state?${params.toString()}`, {
         credentials: 'same-origin',
+        cache: 'no-store',
         headers: { Accept: 'application/json' },
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw makeError(result, response.status, 'Could not load the authoritative game state.');
       if (requestGeneration !== generation || (this.gameId && gameId !== this.gameId)) return null;
-      await this.setAuthoritativeState(result);
+      if (!result.unchanged) await this.setAuthoritativeState(result);
       return result;
     },
 
