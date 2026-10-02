@@ -123,6 +123,17 @@ async function pollAccountNotifications() {
     if (typeof backendFriends !== 'undefined') backendFriends = friends;
     if (typeof backendGameInvitations !== 'undefined') backendGameInvitations = invitations;
 
+    const activeFriendKeys = new Set(requests.filter(item => item.direction === 'incoming').map(item => 'friend:' + item.id));
+    const activeGameKeys = new Set(invitations.filter(item => item.direction === 'incoming').map(item => 'game:' + item.invitationId));
+    document.querySelectorAll('.account-notification[id^="account-notification-friend_"]').forEach(element => {
+      const raw = element.id.replace('account-notification-', '').replace(/^friend_/, 'friend:');
+      if (!activeFriendKeys.has(raw)) element.remove();
+    });
+    document.querySelectorAll('.account-notification[id^="account-notification-game_"]').forEach(element => {
+      const raw = element.id.replace('account-notification-', '').replace(/^game_/, 'game:');
+      if (!activeGameKeys.has(raw)) element.remove();
+    });
+
     for (const request of requests.filter(item => item.direction === 'incoming')) {
       const key = 'friend:' + request.id;
       if (seenFriendRequestNotifications.has(key)) continue;
@@ -257,13 +268,20 @@ async function searchFriendAccounts(event) {
 
 async function sendFriendRequest(username) {
   try {
-    await accountRequest('/api/friends/requests', { method: 'POST', body: JSON.stringify({ username }) });
+    const result = await accountRequest('/api/friends/requests', { method: 'POST', body: JSON.stringify({ username }) });
     friendsScreenState.results = friendsScreenState.results.filter(user => user.username !== username);
-    friendsScreenState.status = `Request sent to ${username}.`;
+    friendsScreenState.status = result.message || (result.autoAccepted
+      ? `You and ${username} are now friends.`
+      : result.alreadyPending
+        ? 'Friend request already sent.'
+        : result.alreadyFriends
+          ? 'You are already friends.'
+          : `Request sent to ${username}.`);
   } catch (error) { friendsScreenState.status = error.message; }
   friendsScreenState.query = '';
   friendsScreenState.results = [];
   await loadFriendsScreen();
+  pollAccountNotifications();
 }
 
 async function decideFriendRequest(id, action) {
@@ -271,8 +289,10 @@ async function decideFriendRequest(id, action) {
     await accountRequest(`/api/friends/requests/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action }) });
     friendsScreenState.status = action === 'accept' ? 'Friend request accepted.' : 'Friend request declined.';
   } catch (error) { friendsScreenState.status = error.message; }
+  dismissAccountNotification('friend:' + id);
   friendsScreenState.results = [];
   await loadFriendsScreen();
+  pollAccountNotifications();
 }
 
 async function removeFriendAccount(id) {
