@@ -5111,12 +5111,13 @@ async function refreshBackendSocial() {
     return;
   }
   try {
-    const [friendResult, invitationResult] = await Promise.all([
-      accountRequest('/api/friends'),
-      backendGameRequest('/api/game/invitations'),
-    ]);
-    backendFriends = Array.isArray(friendResult.friends) ? friendResult.friends : [];
-    backendGameInvitations = Array.isArray(invitationResult.invitations) ? invitationResult.invitations : [];
+    const social = await accountRequest('/api/friends/snapshot');
+    backendFriends = Array.isArray(social.friends) ? social.friends : [];
+    backendGameInvitations = Array.isArray(social.invitations) ? social.invitations : [];
+    if (typeof friendsScreenState !== 'undefined') {
+      friendsScreenState.friends = backendFriends;
+      friendsScreenState.requests = Array.isArray(social.requests) ? social.requests : [];
+    }
     backendSocialError = '';
   } catch (error) {
     backendSocialError = error.message;
