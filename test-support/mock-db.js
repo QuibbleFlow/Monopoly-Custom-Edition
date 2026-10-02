@@ -37,24 +37,27 @@ function makeDb(initial = makeDbState()) {
       return result + part + value;
     }, '').replace(/\s+/g, ' ').trim();
 
-    if (query.startsWith('SELECT g.status, EXISTS ( SELECT 1 FROM game_players gp')) {
-      const accountId = values[0];
-      const knownVersion = values.length > 2 && values[1] != null ? Number(values[1]) : null;
-      const gameId = values[values.length - 1];
+    if (query.startsWith('SELECT g.status, gs.version,')) {
+      const knownVersion = values[0] != null ? Number(values[0]) : null;
+      const gameId = values[3];
+      const accountId = values[4];
       const game = state.games.find(entry => entry.id === gameId);
-      if (!game) return [];
+      const member = state.players.some(player => player.game_id === gameId && player.account_id === accountId);
+      if (!game || !member) return [];
       const stateRow = state.states.find(entry => entry.id === gameId);
       const requests = state.actionRequests.filter(entry => entry.game_id === gameId);
       const latest = requests[requests.length - 1] || null;
       const versionChanged = !stateRow || knownVersion == null || Number(stateRow.version) !== knownVersion;
       return [{
         status: game.status,
-        is_member: state.players.some(player => player.game_id === gameId && player.account_id === accountId),
         version: stateRow ? stateRow.version : null,
         state: stateRow && versionChanged ? stateRow.state : null,
         board: stateRow && versionChanged ? stateRow.board : null,
         result_json: latest && versionChanged ? latest.result_json : null,
       }];
+    }
+    if (query.startsWith('SELECT 1 FROM games WHERE id = $1')) {
+      return state.games.some(entry => entry.id === values[0]) ? [{ '?column?': 1 }] : [];
     }
     if (query.startsWith('SELECT 1 FROM game_players WHERE game_id = $1 AND account_id = $2')) {
       const found = state.players.some(player => player.game_id === values[0] && player.account_id === values[1]);
