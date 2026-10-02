@@ -113,10 +113,10 @@ test('listSaves requires authentication and never returns another account\'s sav
   await saveGame({ account: { id: 'account-a' }, gameId, name: 'Save A', db });
 
   const ownerList = await listSaves({ account: { id: 'account-a' }, db });
-  // Starting the match creates its automatic save slot. The explicit save
-  // below is a second named snapshot owned by the same account.
-  assert.equal(ownerList.saves.length, 2);
-  assert.ok(ownerList.saves.some(save => save.name === 'Save A'));
+  // A match keeps one canonical save slot. Saving again updates that slot
+  // instead of creating duplicate rows for the same match.
+  assert.equal(ownerList.saves.length, 1);
+  assert.equal(ownerList.saves[0].name, 'Save A');
 
   const strangerList = await listSaves({ account: { id: 'account-z' }, db });
   assert.equal(strangerList.saves.length, 0);
@@ -137,9 +137,42 @@ async function saveAndLoad() {
     state.turnOrder = [1, 0];
   });
   const saved = await saveGame({ account: { id: 'account-a' }, gameId, name: 'Resume me', db });
+
+  // These load/resume tests exercise recovery from the save snapshot itself.
+  // Simulate the original live match no longer being available. When it is
+  // still available, loadGame now correctly reopens that authoritative game
+  // instead of cloning stale state.
+  db.state.games = db.state.games.filter(game => game.id !== gameId);
+  db.state.players = db.state.players.filter(player => player.game_id !== gameId);
+  db.state.states = db.state.states.filter(state => state.id !== gameId);
+  db.state.actionRequests = db.state.actionRequests.filter(request => request.game_id !== gameId);
+
   const loaded = await loadGame({ account: { id: 'account-a' }, saveId: saved.save.saveId, db });
   return { db, saved, loaded };
 }
+
+test('loading the save for a still-live match reopens the authoritative match instead of cloning it', async () => {
+  const { db, gameId } = await createActiveGame();
+  const saved = await saveGame({ account: { id: 'account-a' }, gameId, name: 'Live match', db });
+
+  const loaded = await loadGame({ account: { id: 'account-a' }, saveId: saved.save.saveId, db });
+  assert.equal(loaded.ok, true);
+  assert.equal(loaded.gameId, gameId);
+  assert.equal(loaded.status, 'ACTIVE');
+  assert.equal(loaded.reusedExistingGame, true);
+  assert.equal(db.state.games.filter(game => game.id === gameId).length, 1);
+});
+
+test('loading the same old save twice reuses its existing waiting resume lobby', async () => {
+  const { db, saved, loaded } = await saveAndLoad();
+  const again = await loadGame({ account: { id: 'account-a' }, saveId: saved.save.saveId, db });
+
+  assert.equal(again.ok, true);
+  assert.equal(again.gameId, loaded.gameId);
+  assert.equal(again.status, 'WAITING');
+  assert.equal(again.reusedResumeLobby, true);
+  assert.equal(db.state.games.filter(game => game.resume_save_id === saved.save.saveId && game.status === 'WAITING').length, 1);
+});
 
 test('loadGame creates a WAITING resume lobby with the exact original seats and only the loader returned', async () => {
   const { db, loaded } = await saveAndLoad();
