@@ -582,6 +582,35 @@
       root.setTimeout(() => ensureFocused(), 20);
     }
 
+    function openSaveQuitConfirm() {
+      const gameId = root.authoritativeGame && root.authoritativeGame.gameId;
+      const canDirectSave = gameId && typeof root.backendSaveAndQuitGame === 'function';
+      const overlay = doc.getElementById('controllerQuickMenu');
+      if (!overlay) return;
+      const panel = overlay.querySelector('.controller-panel');
+      if (!panel) return;
+      panel.innerHTML = '<h2>Save & Quit?</h2><p class="controller-sub">The match will be saved and paused. Every original player must return before it can continue.</p>';
+      const grid = doc.createElement('div');
+      grid.className = 'controller-grid';
+      const cancel = doc.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'controller-action';
+      cancel.textContent = 'Keep playing';
+      cancel.addEventListener('click', closeQuickMenu);
+      const confirm = doc.createElement('button');
+      confirm.type = 'button';
+      confirm.className = 'controller-action';
+      confirm.textContent = 'Save & Quit';
+      confirm.disabled = !canDirectSave;
+      confirm.addEventListener('click', () => {
+        closeQuickMenu();
+        if (canDirectSave) root.backendSaveAndQuitGame(gameId);
+      });
+      grid.append(cancel, confirm);
+      panel.appendChild(grid);
+      root.setTimeout(() => focusElement(cancel), 0);
+    }
+
     function openQuickMenu() {
       if (keyboardState) return;
       if (quickMenuOpen) { closeQuickMenu(); return; }
@@ -596,7 +625,7 @@
         { label: 'Manage properties', run: () => { closeQuickMenu(); quickAction('manage'); }, enabled: !!buttonByText(['manage properties']) },
         { label: 'View deeds', run: () => { closeQuickMenu(); quickAction('deeds'); }, enabled: !!buttonByText(['view deeds']) },
         { label: 'Trade', run: () => { closeQuickMenu(); quickAction('trade'); }, enabled: !!buttonByText(['trade']) },
-        { label: 'Save & Quit', run: () => { const b = buttonByText(['save & quit']); closeQuickMenu(); if (b) b.click(); }, enabled: !!buttonByText(['save & quit']) },
+        { label: 'Save & Quit', run: () => openSaveQuitConfirm(), enabled: !!buttonByText(['save & quit']) },
       ];
 
       const panel = doc.createElement('div');
@@ -696,7 +725,14 @@
       const finalValue = Number.isInteger(max) && max > 0 ? value.slice(0, max) : value;
       input.value = finalValue;
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      renderKeyboard();
+      // Keep the currently highlighted virtual key focused while typing.
+      // Rebuilding the keyboard after every character made controller text
+      // entry jump back to the first key.
+      const preview = doc.querySelector('#controllerKeyboardOverlay .controller-keyboard-preview');
+      if (preview) {
+        const masked = input.type === 'password';
+        preview.textContent = (masked ? '•'.repeat(input.value.length) : input.value) || input.placeholder || 'Type here';
+      }
     }
 
     function keyboardAppend(char) {
