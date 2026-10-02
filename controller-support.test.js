@@ -44,7 +44,7 @@ test('spatial controller navigation wraps when there is nothing farther in that 
 
 test('virtual cursor has a deadzone, accelerates smoothly, and stays within the viewport', () => {
   const { advanceCursor } = require('./controller-support');
-  const prefs={mode:'mouse',sensitivity:1,deadzone:.2};
+  const prefs={sensitivity:1,deadzone:.2};
   let cursor={x:100,y:100,vx:0,vy:0};
   assert.deepEqual(advanceCursor(cursor,.1,.1,.016,390,900,prefs),cursor);
   cursor=advanceCursor(cursor,1,0,.016,390,900,prefs);
@@ -58,11 +58,21 @@ test('virtual cursor has a deadzone, accelerates smoothly, and stays within the 
   assert.ok(stopped.vx<cursor.vx);
 });
 
-test('controller settings clamp sensitivity and deadzone and support mode switching', () => {
+test('controller settings clamp sensitivity and deadzone without retaining a manual mode', () => {
   const { configure, getPreferences, normalizePreferences }=require('./controller-support');
-  assert.deepEqual(normalizePreferences({mode:'bad',sensitivity:99,deadzone:99}),{mode:'focus',sensitivity:2.5,deadzone:.4});
+  assert.deepEqual(normalizePreferences({mode:'bad',sensitivity:99,deadzone:99}),{sensitivity:2.5,deadzone:.4});
   configure({mode:'mouse',sensitivity:.7,deadzone:.15});
-  assert.deepEqual(getPreferences(),{mode:'mouse',sensitivity:.7,deadzone:.15});
+  assert.deepEqual(getPreferences(),{sensitivity:.7,deadzone:.15});
   configure({mode:'focus'});
-  assert.equal(getPreferences().mode,'focus');
+  assert.equal(getPreferences().mode,undefined);
+});
+
+test('controller interaction follows the screen rather than an account preference', () => {
+  const { modeForContext } = require('./controller-support');
+  for (const screen of ['menu','profile','friends','lobby','boards','settings','save','reconnect']) {
+    assert.equal(modeForContext(screen),'mouse',screen);
+  }
+  for (const screen of ['gameplay','manage','purchase','auction','keyboard','trade','dialog','other',undefined]) {
+    assert.equal(modeForContext(screen),'focus',screen);
+  }
 });

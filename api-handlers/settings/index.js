@@ -15,7 +15,11 @@ module.exports = async function settings(req, res) {
     if (req.method === 'PATCH' && !requireSameOrigin(req, res)) return;
     const account = await requireAccount(req, res);
     if (!account) return;
-    if (req.method === 'GET') return res.status(200).json({ settings: account.settings || {} });
+    if (req.method === 'GET') {
+      const saved = { ...(account.settings || {}) };
+      if (saved.controllerPreferences) { saved.controllerPreferences = { ...saved.controllerPreferences }; delete saved.controllerPreferences.mode; }
+      return res.status(200).json({ settings: saved });
+    }
 
     const { settings } = parseBody(req);
     if (!settings || typeof settings !== 'object' || Array.isArray(settings) ||
@@ -30,8 +34,10 @@ module.exports = async function settings(req, res) {
     const merged = { ...(account.settings || {}), ...settings };
     delete merged.cameraPreferences;
     if (merged.controllerPreferences) {
-      const prefs = merged.controllerPreferences;
-      if (!['focus', 'mouse'].includes(prefs.mode) || !Number.isFinite(prefs.sensitivity) ||
+      const prefs = { ...merged.controllerPreferences };
+      delete prefs.mode;
+      merged.controllerPreferences = prefs;
+      if (!Number.isFinite(prefs.sensitivity) ||
           prefs.sensitivity < .4 || prefs.sensitivity > 2.5 || !Number.isFinite(prefs.deadzone) || prefs.deadzone < .1 || prefs.deadzone > .4) {
         return sendError(res, 400, 'Controller settings are invalid.');
       }

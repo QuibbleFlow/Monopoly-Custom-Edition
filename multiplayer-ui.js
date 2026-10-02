@@ -218,12 +218,11 @@ function showGamePlayers() {
 }
 
 function controllerSettingsHTML() {
-  const prefs = window.MonopolyControllerSupport?.getPreferences() || { mode: 'focus', sensitivity: 1.2, deadzone: .18 };
+  const prefs = window.MonopolyControllerSupport?.getPreferences() || { sensitivity: 1.2, deadzone: .18 };
   return `<fieldset class="controller-settings"><legend>Controller</legend>
-    <label for="controllerMode">Interaction mode<select id="controllerMode" onchange="setControllerPreference('mode',this.value)"><option value="focus" ${prefs.mode === 'focus' ? 'selected' : ''}>Focus Navigation</option><option value="mouse" ${prefs.mode === 'mouse' ? 'selected' : ''}>Virtual Mouse</option></select></label>
     <label for="controllerSensitivity">Cursor sensitivity<input id="controllerSensitivity" type="range" min="0.4" max="2.5" step="0.1" value="${prefs.sensitivity}" oninput="setControllerPreference('sensitivity',Number(this.value))"></label>
     <label for="controllerDeadzone">Stick deadzone<input id="controllerDeadzone" type="range" min="0.1" max="0.4" step="0.01" value="${prefs.deadzone}" oninput="setControllerPreference('deadzone',Number(this.value))"></label>
-    <p class="muted">Left stick: move · A: select · B: back · Right stick: scroll · Menu: game menu</p></fieldset>`;
+    <p class="muted">Controls switch automatically. Menus use a cursor; gameplay, property controls and typing use highlighted buttons. A: select · B: back · Menu: game menu.</p></fieldset>`;
 }
 
 function setControllerPreference(key, value) {

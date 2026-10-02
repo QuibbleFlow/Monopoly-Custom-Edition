@@ -68,7 +68,7 @@ Reopening the site prioritizes the reserved-seat screen with the board, players,
 
 ## Controller
 
-Controller settings switch immediately between Focus Navigation and Virtual Mouse. Focus mode moves between visible controls using the stick or D-pad. Virtual Mouse uses the left stick for a bounded cursor, A to select, B to go back, the right stick to scroll, and Menu to open the Game Menu. Sensitivity and deadzone are adjustable; text inputs open the controller keyboard. Both modes use the same modal scope as mouse/keyboard controls.
+Controller interaction switches automatically, with no mode selector. Menus use the left stick as a bounded virtual cursor, A to select, B to go back, and the right stick to scroll. Gameplay, property management, purchase decisions, auctions, and the controller keyboard use focus navigation within their own controls. A large A TO ROLL prompt appears when the current player can roll and the roll action is selected. Menu opens the Game Menu, or finishes typing while the keyboard is open. LB/RB cycle managed properties; B exits management, sends a purchase to auction, or folds an auction. Sensitivity and deadzone remain adjustable.
 
 `npm test` includes PostgreSQL integration tests through PGlite for persisted reconnect deadlines, final-second returns, multiple tabs, host succession, saved invitations, removals, and save-slot eviction. No additional database migration is needed for connection metadata, which is stored in the existing `game_states.state` JSON.
 

@@ -3308,7 +3308,7 @@ function updateDock() {
     primary = `<button class="primary" onclick="restart()">Play again</button>`;
   } else if (game.phase === 'roll') {
     const label = backendMode && authoritativeRollRequest ? 'Retry Roll' : 'Roll';
-    primary = `<button class="primary" ${rollIdle ? '' : 'disabled'} onclick="${rollHandler}">${label} ${DICE_ICON}</button>`;
+    primary = `<button class="primary" data-controller-action="roll" ${rollIdle ? '' : 'disabled'} onclick="${rollHandler}">${label} ${DICE_ICON}</button>`;
     if (p.inJail) primary += `<button class="dbtn" ${idle && p.money >= (game?.rules?.jailFine ?? JAIL_FINE) ? '' : 'disabled'} onclick="act('payJailFine')">Pay ${fmt(game?.rules?.jailFine ?? JAIL_FINE)} to leave jail</button>`;
   } else if (game.phase === 'after') {
     primary = `<button class="primary" ${idle ? '' : 'disabled'} onclick="act('endTurnClick')">End turn</button>`;
@@ -3329,6 +3329,7 @@ function updateDock() {
       ${viewTradeBtnHTML()}
     </div>
     <div class="dock-group action">${primary}</div>`;
+  $('dock').dataset.controllerPlayer = p.name;
   $('turnLabel').innerHTML = game.over ? 'Game over' : `Turn ${game.turn || 1}<br>${esc(p.name)}'s turn`;
 }
 // A postponed trade closes its own popup (see updateModal) so it doesn't
@@ -3607,9 +3608,9 @@ function updateManage() {
     housesPanel = `<h3>Houses</h3>
       <div class="line">Current: ${h === 5 ? houseSVG(0, true) + ' hotel' : houseSVG(h, false) + ' ' + h}</div>
       <div class="line">
-        <button class="mg-btn" title="Sell a house" onclick="act('sellHouse', ${sq})" ${can && canSell(sq, p.id) ? '' : 'disabled'}>-</button>
+        <button class="mg-btn" data-controller-focus="sell-house" aria-label="Sell a house" title="Sell a house" onclick="act('sellHouse', ${sq})" ${can && canSell(sq, p.id) ? '' : 'disabled'}>-</button>
         <span>${fmt(s.houseCost)}</span>
-        <button class="mg-btn plus" title="Build a house" onclick="act('buildHouse', ${sq})" ${can && canBuild(sq, p.id) ? '' : 'disabled'}>+</button>
+        <button class="mg-btn plus" data-controller-focus="build-house" aria-label="Build a house" title="Build a house" onclick="act('buildHouse', ${sq})" ${can && canBuild(sq, p.id) ? '' : 'disabled'}>+</button>
       </div><div class="small">${hint}</div>`;
   } else {
     housesPanel = `<h3>Houses</h3><div class="line small">You cannot build on this kind of square.</div>`;
@@ -3619,8 +3620,8 @@ function updateManage() {
     <div class="line">Status:</div>
     <div class="line ${mort ? 'badc' : 'good'}">${mort ? 'Mortgaged' : 'Unmortgaged'}</div>
     <div class="line">${mort
-      ? `<button class="mg-btn mort-btn" onclick="act('unmortgage', ${sq})" ${can && p.money >= unmortgageCost(sq) ? '' : 'disabled'}>Unmortgage</button><span>${fmt(unmortgageCost(sq))}</span>`
-      : `<button class="mg-btn mort-btn" onclick="act('mortgage', ${sq})" ${can && canMortgage(sq, p.id) ? '' : 'disabled'}>Mortgage</button><span>${fmt(mortgageValue(sq))}</span>`}</div>
+      ? `<button class="mg-btn mort-btn" data-controller-focus="mortgage" onclick="act('unmortgage', ${sq})" ${can && p.money >= unmortgageCost(sq) ? '' : 'disabled'}>Unmortgage</button><span>${fmt(unmortgageCost(sq))}</span>`
+      : `<button class="mg-btn mort-btn" data-controller-focus="mortgage" onclick="act('mortgage', ${sq})" ${can && canMortgage(sq, p.id) ? '' : 'disabled'}>Mortgage</button><span>${fmt(mortgageValue(sq))}</span>`}</div>
     ${!mort && s.type === 'property' && groupHasHouses(s.group) ? '<div class="small">Sell all houses in this color first.</div>' : ''}`;
   box.innerHTML = `
     <div class="mg-title">${esc(s.name)} (${ui.manage.idx + 1} of ${list.length})</div>
@@ -3923,7 +3924,7 @@ function updateModal() {
   const entering = key !== modalKey;   // only play the open animation when a new dialog appears
   modalKey = key;
   // Note: typing in the trade form does not call render(), so typed numbers survive.
-  box.innerHTML = `<div class="scrim" ${extra}><div class="dialog ${cls} ${entering ? 'enter' : ''}" role="dialog" aria-modal="true" tabindex="-1">${html}</div></div>`;
+  box.innerHTML = `<div class="scrim" data-controller-context="${key === 'buy' ? 'purchase' : key.startsWith('trade') ? 'trade' : key}" ${extra}><div class="dialog ${cls} ${entering ? 'enter' : ''}" role="dialog" aria-modal="true" tabindex="-1">${html}</div></div>`;
   if (entering) { const d = box.querySelector('.dialog'); if (d) d.focus(); }
 }
 
@@ -4872,7 +4873,7 @@ const DEFAULT_ACCOUNT_SETTINGS = {
   musicVolume: 35,
   soundEffectsVolume: 100,
   interfacePreferences: { soundEnabled: true },
-  controllerPreferences: { mode: 'focus', sensitivity: 1.2, deadzone: .18 },
+  controllerPreferences: { sensitivity: 1.2, deadzone: .18 },
   gamePreferences: { playerCount: 2 },
   other: {},
 };
@@ -5826,6 +5827,7 @@ function applyAccountSettings(settings = {}) {
   soundEffectsVolume = Math.max(0, Math.min(100, Number(accountSettings.soundEffectsVolume))) / 100;
   soundOn = accountSettings.interfacePreferences.soundEnabled !== false;
   delete accountSettings.cameraPreferences;
+  delete accountSettings.controllerPreferences.mode;
   window.MonopolyControllerSupport?.configure(accountSettings.controllerPreferences);
   if (bgMusic) bgMusic.volume = musicVolume * MAX_MUSIC_VOLUME;
   try { localStorage.removeItem('monopolyMusicVolume'); } catch (e) {}

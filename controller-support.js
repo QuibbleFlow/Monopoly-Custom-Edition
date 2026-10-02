@@ -87,7 +87,11 @@
     return bestIndex;
   }
 
-  let preferences = { mode: 'focus', sensitivity: 1.2, deadzone: .18 };
+  function modeForContext(context) {
+    return ['menu', 'profile', 'friends', 'lobby', 'boards', 'settings', 'save', 'reconnect'].includes(context) ? 'mouse' : 'focus';
+  }
+
+  let preferences = { sensitivity: 1.2, deadzone: .18 };
   let runtime = null;
   try {
     const stored = JSON.parse(root.localStorage?.getItem('monopolyController') || '{}');
@@ -96,7 +100,6 @@
 
   function normalizePreferences(value = {}) {
     return {
-      mode: value.mode === 'mouse' ? 'mouse' : 'focus',
       sensitivity: Math.max(.4, Math.min(2.5, Number(value.sensitivity) || 1.2)),
       deadzone: Math.max(.1, Math.min(.4, Number(value.deadzone) || .18)),
     };
@@ -139,6 +142,9 @@
     let cursor = { x: root.innerWidth / 2, y: root.innerHeight / 2, vx: 0, vy: 0 };
     let lastFrameAt = null;
     let hoveredElement = null;
+    let interaction = { kind: 'menu', mode: 'mouse', scope: doc };
+    let hudSignature = '';
+    let lastFocusKey = null;
 
     function addStyles() {
       if (doc.getElementById('controllerSupportStyles')) return;
@@ -160,6 +166,7 @@
           bottom: 10px;
           transform: translateX(-50%);
           z-index: 525;
+          width: max-content;
           max-width: calc(100vw - 20px);
           display: none;
           align-items: center;
@@ -177,9 +184,16 @@
           pointer-events: none;
         }
         body.controller-input .controller-hud.connected { display: flex; }
+        body[data-controller-screen="keyboard"] .controller-hud { z-index:550; }
         .controller-cursor { position:fixed;z-index:1100;pointer-events:none;width:20px;height:20px;border:3px solid #101a14;border-radius:50%;background:#ffd84d;box-shadow:0 0 0 2px #fff;transform:translate(-50%,-50%);display:none; }
         body.controller-input .controller-cursor.enabled { display:block; }
         .controller-hover { outline:3px solid #ffd84d !important;outline-offset:3px !important; }
+        .controller-turn-prompt { position:fixed;left:50%;bottom:calc(var(--controller-hud-height, 54px) + 22px);transform:translateX(-50%);z-index:526;max-width:calc(100vw - 28px);padding:14px 28px;border:2px solid #ffd84d;border-radius:18px;background:rgba(9,35,23,.97);color:#fff;box-shadow:0 8px 32px rgba(0,0,0,.4);text-align:center;pointer-events:none;display:none; }
+        body.controller-input .controller-turn-prompt:not([hidden]) { display:block; }
+        .controller-turn-prompt small { display:block;font-size:.9rem;font-weight:800;margin-bottom:7px;color:#fff1a0; }
+        .controller-turn-prompt strong { display:flex;align-items:center;justify-content:center;gap:14px;font-size:clamp(1.6rem,4vw,2.6rem);font-weight:950;white-space:nowrap; }
+        .controller-turn-prompt kbd { display:inline-grid;place-items:center;min-width:1.25em;height:1.25em;border-radius:50%;background:#138238;border:2px solid #afffc4;color:#fff;font:inherit; }
+        @media (max-width:600px) { .controller-turn-prompt { padding:12px 20px; } .controller-hud .pad-name { display:none; } }
         .controller-hud .pad-name {
           opacity: .78;
           margin-right: 3px;
@@ -308,7 +322,16 @@
       hud.className = 'controller-hud';
       hud.setAttribute('aria-live', 'polite');
       doc.body.appendChild(hud);
+      if (root.ResizeObserver) new root.ResizeObserver(positionTurnPrompt).observe(hud);
       return hud;
+    }
+
+    function positionTurnPrompt() {
+      const height = Math.ceil(doc.getElementById('controllerHud')?.getBoundingClientRect().height || 0);
+      const value = height + 'px';
+      if (height && doc.body.style.getPropertyValue('--controller-hud-height') !== value) {
+        doc.body.style.setProperty('--controller-hud-height', value);
+      }
     }
 
     function isGameScreen() {
@@ -319,17 +342,95 @@
       const hud = ensureHud();
       if (connectedIndex == null) {
         hud.classList.remove('connected');
+        updateTurnPrompt(false);
         return;
       }
-      const gameHints = isGameScreen()
-        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.RT}</kbd> Main action</span><span><kbd>${labels.MENU}</kbd> Game menu</span>`
-        : '';
+      const hints = interaction.kind === 'keyboard'
+        ? `<span>Stick / D-pad: choose key</span><span><kbd>${labels.A}</kbd> Type</span><span><kbd>${labels.X}</kbd> Delete</span><span><kbd>${labels.B}</kbd> Cancel</span><span><kbd>${labels.MENU}</kbd> Done</span>`
+        : interaction.kind === 'manage'
+          ? `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.LB}</kbd><kbd>${labels.RB}</kbd> Property</span><span><kbd>${labels.B}</kbd> Exit</span>`
+          : interaction.kind === 'purchase'
+            ? `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Confirm</span><span><kbd>${labels.B}</kbd> Auction</span>`
+            : interaction.kind === 'auction'
+              ? `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Bid / edit</span><span><kbd>${labels.B}</kbd> Fold</span>`
+              : interaction.mode === 'mouse'
+                ? `<span>Left stick: cursor</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.B}</kbd> Back</span><span>Right stick: scroll</span>`
+                : `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.B}</kbd> Back</span>`;
+      const gameHints = interaction.kind === 'gameplay'
+        ? `<span><kbd>${labels.X}</kbd> Manage</span><span><kbd>${labels.Y}</kbd> Trade</span><span><kbd>${labels.LB}</kbd> Deeds</span><span><kbd>${labels.MENU}</kbd> Game menu</span>` : '';
       hud.innerHTML = `<span class="pad-name">🎮 ${escapeHtml(shortControllerName(connectedId))}</span>
-        <span><kbd>${labels.A}</kbd> Select</span>
-        <span><kbd>${labels.B}</kbd> Back</span>
-        <span>${preferences.mode === 'mouse' ? 'Left stick: cursor · Right stick: scroll' : '✚ Navigate'}</span>
+        ${hints}
         ${gameHints}`;
       hud.classList.add('connected');
+      positionTurnPrompt();
+    }
+
+    function updateTurnPrompt(canRoll) {
+      let prompt = doc.getElementById('controllerTurnPrompt');
+      if (!prompt && !canRoll) return;
+      if (!prompt) {
+        prompt = doc.createElement('div'); prompt.id = 'controllerTurnPrompt';
+        prompt.className = 'controller-turn-prompt'; prompt.setAttribute('role', 'status');
+        doc.body.appendChild(prompt);
+      }
+      const player = doc.getElementById('dock')?.dataset.controllerPlayer || '';
+      const text = `<small>${player ? escapeHtml(player) + ', your turn' : 'Your turn'}</small><strong><kbd>${labels.A}</kbd> TO ROLL</strong>`;
+      if (canRoll && prompt.innerHTML !== text) prompt.innerHTML = text;
+      if (prompt.hidden !== !canRoll) prompt.hidden = !canRoll;
+    }
+
+    function readInteraction() {
+      const keyboard = doc.getElementById('controllerKeyboardOverlay');
+      if (keyboard) return { kind: 'keyboard', mode: 'focus', scope: keyboard };
+      const scrims = Array.from(doc.querySelectorAll('.scrim')).filter(visible);
+      const scrim = scrims[scrims.length - 1];
+      if (scrim && scrim.id !== 'gameMenuOverlay') {
+        const kind = scrim.dataset.controllerContext || 'dialog';
+        return { kind, mode: 'focus', scope: scrim };
+      }
+      const accountMenu = doc.getElementById('cornerAccountDialog');
+      if (accountMenu && visible(accountMenu)) return { kind: 'profile', mode: 'mouse', scope: accountMenu };
+      if (scrim) return { kind: 'settings', mode: 'mouse', scope: scrim };
+      const manage = doc.getElementById('manage');
+      if (manage?.querySelector('.mg-exit')) return { kind: 'manage', mode: 'focus', scope: manage };
+      const pause = doc.getElementById('pauseOverlay');
+      if (pause && visible(pause)) return { kind: 'paused', mode: 'focus', scope: pause };
+      if (isGameScreen()) return { kind: 'gameplay', mode: 'focus', scope: doc };
+      const kind = doc.querySelector('.reconnect-screen') ? 'reconnect' : doc.querySelector('.setup') ? 'menu' : 'other';
+      return { kind, mode: modeForContext(kind), scope: doc };
+    }
+
+    function focusKey(element) {
+      return element?.dataset.controllerFocus || element?.id || element?.getAttribute('onclick') || null;
+    }
+
+    function syncInteraction() {
+      if (keyboardState && !keyboardState.input.isConnected) closeKeyboard(false);
+      const next = readInteraction();
+      const changed = next.kind !== interaction.kind || next.mode !== interaction.mode;
+      interaction = next;
+      if (doc.body.dataset.controllerMode !== next.mode) doc.body.dataset.controllerMode = next.mode;
+      if (doc.body.dataset.controllerScreen !== next.kind) doc.body.dataset.controllerScreen = next.kind;
+      if (changed) {
+        cursor.vx = 0; cursor.vy = 0;
+        hoveredElement?.classList.remove('controller-hover'); hoveredElement = null;
+        repeatState = Object.create(null); lastFocusKey = null;
+        drawCursor();
+      }
+      if (next.mode === 'focus' && doc.body.classList.contains('controller-input')) {
+        const active = doc.activeElement;
+        if (!active || active === doc.body || !active.isConnected || !next.scope.contains(active) || active.disabled || changed) {
+          const elements = focusableElements();
+          const previous = !changed && lastFocusKey ? elements.find(el => focusKey(el) === lastFocusKey) : null;
+          focusElement(previous || preferredElement(elements));
+        }
+        lastFocusKey = focusKey(doc.activeElement);
+      }
+      const roll = doc.querySelector('#dock [data-controller-action="roll"]');
+      const canRoll = next.kind === 'gameplay' && !!roll && !roll.disabled && visible(roll) && doc.activeElement === roll;
+      updateTurnPrompt(canRoll);
+      const signature = [next.kind, next.mode, connectedId, canRoll].join('|');
+      if (signature !== hudSignature) { hudSignature = signature; updateHud(); }
     }
 
     function shortControllerName(id) {
@@ -393,6 +494,8 @@
       buttonWasDown = [];
       repeatState = Object.create(null);
       addStyles();
+      interaction = readInteraction();
+      hudSignature = '';
       updateHud();
       if (changed) {
         toast('🎮 Controller connected');
@@ -430,15 +533,7 @@
     }
 
     function activeScope() {
-      const keyboard = doc.getElementById('controllerKeyboardOverlay');
-      if (keyboard) return keyboard;
-      const quick = doc.getElementById('controllerQuickMenu');
-      if (quick) return quick;
-      const scrims = Array.from(doc.querySelectorAll('.scrim')).filter(visible);
-      if (scrims.length) return scrims[scrims.length - 1];
-      const accountMenu = doc.getElementById('cornerAccountDialog');
-      if (accountMenu && visible(accountMenu)) return accountMenu;
-      return doc;
+      return readInteraction().scope;
     }
 
     function focusableElements() {
@@ -465,6 +560,8 @@
       const preferredSelectors = [
         '#controllerQuickMenu .controller-action:not([disabled])',
         '#controllerKeyboardOverlay .controller-key:not([disabled])',
+        '#manage .mg-panel .mg-btn:not([disabled])',
+        '#modal .round.ok:not([disabled])',
         '#modal .primary:not([disabled])',
         '#modal .btn:not([disabled])',
         '#dock .primary:not([disabled])',
@@ -481,7 +578,9 @@
       if (!el || !visible(el)) return;
       setControllerInputMode();
       try { el.focus({ preventScroll: true }); } catch (error) { el.focus(); }
-      try { el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); } catch (error) {}
+      if (!el.closest('#manage, #board')) {
+        try { el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' }); } catch (error) {}
+      }
       haptic(.035, 18);
     }
 
@@ -561,13 +660,13 @@
       return Array.from(scope.querySelectorAll('button:not([disabled]), [role="button"]:not([aria-disabled="true"])'))
         .filter(visible)
         .find(button => {
-          const text = (button.textContent || '').trim().toLowerCase();
+          const text = (button.getAttribute('aria-label') || button.textContent || '').trim().toLowerCase();
           return lowered.some(pattern => text === pattern || text.startsWith(pattern));
         }) || null;
     }
 
     function triggerByText(patterns) {
-      const button = buttonByText(patterns);
+      const button = buttonByText(patterns, activeScope());
       if (!button) return false;
       button.click();
       haptic(.14, 42);
@@ -581,13 +680,16 @@
         closeKeyboard(false);
         return;
       }
+      const context = readInteraction();
+      if (context.kind === 'purchase') { triggerByText(['auction']); return; }
+      if (context.kind === 'auction') { triggerByText(['fold']); return; }
       if (quickMenuOpen) {
         closeQuickMenu();
         return;
       }
-      if (doc.getElementById('gameMenuOverlay') && typeof root.closeGameMenu === 'function') { root.closeGameMenu(); return; }
+      if (context.scope.id === 'gameMenuOverlay' && typeof root.closeGameMenu === 'function') { root.closeGameMenu(); return; }
       const accountMenu = doc.getElementById('cornerAccountDialog');
-      if (accountMenu && visible(accountMenu) && typeof root.closeCornerMenu === 'function') {
+      if (context.scope === accountMenu && typeof root.closeCornerMenu === 'function') {
         root.closeCornerMenu();
         return;
       }
@@ -615,7 +717,7 @@
 
     function quickAction(kind) {
       setControllerInputMode();
-      if (!isGameScreen() || keyboardState || quickMenuOpen) return;
+      if (readInteraction().kind !== 'gameplay' || keyboardState || quickMenuOpen) return;
       if (kind === 'manage') triggerByText(['manage properties']);
       else if (kind === 'trade') triggerByText(['trade']);
       else if (kind === 'deeds') triggerByText(['view deeds']);
@@ -652,7 +754,9 @@
 
     function drawCursor() {
       const element = cursorElement();
-      element.classList.toggle('enabled', preferences.mode === 'mouse' && connectedIndex != null);
+      cursor.x = Math.max(2, Math.min(root.innerWidth - 2, cursor.x));
+      cursor.y = Math.max(2, Math.min(root.innerHeight - 2, cursor.y));
+      element.classList.toggle('enabled', interaction.mode === 'mouse' && connectedIndex != null);
       element.style.left = cursor.x + 'px'; element.style.top = cursor.y + 'px';
     }
 
@@ -739,7 +843,7 @@
       const previewValue = masked ? '•'.repeat(state.input.value.length) : state.input.value;
       panel.innerHTML = `
         <h2>⌨️ Controller keyboard</h2>
-        <p class="controller-sub">${labels.A} type · ${labels.B} cancel · ${labels.X} backspace · ${labels.Y} space</p>
+        <p class="controller-sub">${labels.A} type · ${labels.B} cancel · ${labels.X} delete · ${labels.Y} space · ${labels.MENU} done</p>
         <div class="controller-keyboard-preview" aria-live="polite">${escapeHtml(previewValue || state.input.placeholder || 'Type here')}</div>
       `;
 
@@ -834,7 +938,7 @@
     }
 
     function browseBoard(delta) {
-      if (!isGameScreen() || keyboardState || quickMenuOpen) return false;
+      if (readInteraction().kind !== 'gameplay' || keyboardState || quickMenuOpen) return false;
       let current = doc.activeElement;
       let index = current && current.id && /^cell\d+$/.test(current.id)
         ? Number(current.id.slice(4))
@@ -854,6 +958,11 @@
 
     function shoulder(direction) {
       const scope = activeScope();
+      if (readInteraction().kind === 'manage') {
+        const arrow = scope.querySelector(direction > 0 ? '.mg-arrow.left' : '.mg-arrow.right');
+        if (arrow && !arrow.disabled) { arrow.click(); haptic(.08, 30); }
+        return;
+      }
       const candidates = Array.from(scope.querySelectorAll(
         '.mg-arrow:not([disabled]), .player-tab:not([disabled]), .deed-tab:not([disabled]), .seg .btn:not([disabled])'
       )).filter(visible);
@@ -922,6 +1031,8 @@
         disconnectedTimer = null;
       }
 
+      syncInteraction();
+
       let used = false;
       const elapsed = lastFrameAt == null ? 1 / 60 : Math.min(.05, (timestamp - lastFrameAt) / 1000);
       lastFrameAt = timestamp;
@@ -934,15 +1045,15 @@
       const left = pressed(pad, STANDARD.LEFT) || x < -DEADZONE;
       const right = pressed(pad, STANDARD.RIGHT) || x > DEADZONE;
 
-      if (preferences.mode === 'mouse') {
-        const moving = Math.hypot(x, y) > preferences.deadzone;
-        if (moving || Math.hypot(cursor.vx, cursor.vy) > .1) { moveCursor(x, y, elapsed); used = moving; }
+      if (interaction.mode === 'mouse') {
+        const pointerX = pressed(pad, STANDARD.LEFT) ? -1 : pressed(pad, STANDARD.RIGHT) ? 1 : x;
+        const pointerY = pressed(pad, STANDARD.UP) ? -1 : pressed(pad, STANDARD.DOWN) ? 1 : y;
+        const moving = Math.hypot(pointerX, pointerY) > preferences.deadzone;
+        if (moving || Math.hypot(cursor.vx, cursor.vy) > .1) { moveCursor(pointerX, pointerY, elapsed); used = moving; }
         const scrollX = Math.abs(rx) > preferences.deadzone ? rx : 0;
         const scrollY = Math.abs(ry) > preferences.deadzone ? ry : 0;
         const triggerScroll = (pressed(pad, STANDARD.RT) ? 1 : 0) - (pressed(pad, STANDARD.LT) ? 1 : 0);
         if (scrollX || scrollY || triggerScroll) { scrollCursor(scrollX, scrollY || triggerScroll, elapsed); used = true; }
-        if (repeatGate('mouse-up', up && pressed(pad, STANDARD.UP), timestamp)) { moveFocus(0, -1); used = true; }
-        if (repeatGate('mouse-down', down && pressed(pad, STANDARD.DOWN), timestamp)) { moveFocus(0, 1); used = true; }
       } else {
       if (repeatGate('up', up, timestamp)) { moveFocus(0, -1); used = true; }
       else if (repeatGate('down', down, timestamp)) { moveFocus(0, 1); used = true; }
@@ -965,7 +1076,7 @@
 
       }
 
-      if (edge(pad, STANDARD.A)) { if (preferences.mode === 'mouse') clickCursor(); else activateFocused(); used = true; }
+      if (edge(pad, STANDARD.A)) { if (interaction.mode === 'mouse') clickCursor(); else activateFocused(); used = true; }
       if (edge(pad, STANDARD.B)) { contextualBack(); used = true; }
       if (edge(pad, STANDARD.X)) {
         if (keyboardState) keyboardBackspace(); else quickAction('manage');
@@ -975,18 +1086,18 @@
         if (keyboardState) keyboardAppend(' '); else quickAction('trade');
         used = true;
       }
-      if (edge(pad, STANDARD.LB)) { if (!keyboardState) quickAction('deeds'); used = true; }
+      if (edge(pad, STANDARD.LB)) { if (interaction.kind === 'manage') shoulder(-1); else if (!keyboardState) quickAction('deeds'); used = true; }
       if (edge(pad, STANDARD.RB)) { if (!keyboardState) shoulder(1); used = true; }
-      if (edge(pad, STANDARD.LT)) { if (preferences.mode === 'focus' && !keyboardState) shoulder(-1); used = true; }
-      if (edge(pad, STANDARD.RT)) { if (preferences.mode === 'focus' && !keyboardState) quickAction('primary'); used = true; }
-      if (edge(pad, STANDARD.MENU)) { openQuickMenu(); used = true; }
+      if (edge(pad, STANDARD.LT)) { if (interaction.mode === 'focus' && !keyboardState) shoulder(-1); used = true; }
+      if (edge(pad, STANDARD.RT)) { if (interaction.mode === 'focus' && !keyboardState) quickAction('primary'); used = true; }
+      if (edge(pad, STANDARD.MENU)) { if (keyboardState) closeKeyboard(true); else openQuickMenu(); used = true; }
       if (edge(pad, STANDARD.VIEW)) {
         updateHud();
-        toast(`${labels.A} Select · ${labels.B} Back · D-pad Navigate · Right stick Browse board`);
+        toast(interaction.mode === 'mouse' ? `Left stick: cursor · ${labels.A} select · ${labels.B} back · Right stick: scroll` : `Stick / D-pad: choose · ${labels.A} confirm · ${labels.B} back`);
         used = true;
       }
       if (edge(pad, STANDARD.LS)) {
-        if (isGameScreen()) {
+        if (interaction.kind === 'gameplay') {
           const boardCell = doc.getElementById('cell0');
           if (boardCell) focusElement(boardCell);
         } else {
@@ -1027,6 +1138,7 @@
     ensureHud();
     root.addEventListener('gamepadconnected', onGamepadConnected);
     root.addEventListener('gamepaddisconnected', onGamepadDisconnected);
+    root.addEventListener('resize', positionTurnPrompt);
     doc.addEventListener('pointerdown', onPointerInput, { passive: true });
     doc.addEventListener('keydown', onKeyboardInput, { passive: true });
 
@@ -1049,6 +1161,7 @@
     normalizePreferences,
     configure,
     getPreferences: () => ({ ...preferences }),
+    modeForContext,
     init,
   };
 });
