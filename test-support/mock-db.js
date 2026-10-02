@@ -39,19 +39,21 @@ function makeDb(initial = makeDbState()) {
 
     if (query.startsWith('SELECT g.status, EXISTS ( SELECT 1 FROM game_players gp')) {
       const accountId = values[0];
-      const gameId = values[1];
+      const knownVersion = values.length > 2 && values[1] != null ? Number(values[1]) : null;
+      const gameId = values[values.length - 1];
       const game = state.games.find(entry => entry.id === gameId);
       if (!game) return [];
       const stateRow = state.states.find(entry => entry.id === gameId);
       const requests = state.actionRequests.filter(entry => entry.game_id === gameId);
       const latest = requests[requests.length - 1] || null;
+      const versionChanged = !stateRow || knownVersion == null || Number(stateRow.version) !== knownVersion;
       return [{
         status: game.status,
         is_member: state.players.some(player => player.game_id === gameId && player.account_id === accountId),
         version: stateRow ? stateRow.version : null,
-        state: stateRow ? stateRow.state : null,
-        board: stateRow ? stateRow.board : null,
-        result_json: latest ? latest.result_json : null,
+        state: stateRow && versionChanged ? stateRow.state : null,
+        board: stateRow && versionChanged ? stateRow.board : null,
+        result_json: latest && versionChanged ? latest.result_json : null,
       }];
     }
     if (query.startsWith('SELECT 1 FROM game_players WHERE game_id = $1 AND account_id = $2')) {
