@@ -526,6 +526,7 @@ async function getMyGames({ account, db = database() }) {
       isHost: game.host_account_id === account.id,
       inviteOnly: !!game.invite_only,
       selectedBoardId: game.selected_board_id || null,
+      resumeSaveId: game.resume_save_id || null,
       seatIndex: Number(game.seat_index),
       startedAt: game.started_at || null,
       updatedAt: game.updated_at || null,

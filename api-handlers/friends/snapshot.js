@@ -32,6 +32,25 @@ module.exports = async function socialSnapshot(req, res, deps = {}) {
               'id', a.id,
               'username', a.username,
               'avatar_url', a.avatar_url,
+              'joinableGame', (
+                SELECT jsonb_build_object('gameId', g.id, 'name', g.name)
+                FROM game_players friend_seat
+                JOIN games g ON g.id = friend_seat.game_id
+                WHERE friend_seat.account_id = a.id AND g.status = 'WAITING'
+                  AND (
+                    EXISTS (SELECT 1 FROM game_players me WHERE me.game_id = g.id AND me.account_id = ${account.id})
+                    OR (
+                      g.resume_save_id IS NULL
+                      AND (SELECT COUNT(*) FROM game_players seats WHERE seats.game_id = g.id) < 8
+                      AND (NOT g.invite_only OR EXISTS (
+                        SELECT 1 FROM game_invitations invitation
+                        WHERE invitation.game_id = g.id AND invitation.invitee_account_id = ${account.id}
+                          AND invitation.status IN ('pending', 'accepted')
+                      ))
+                    )
+                  )
+                ORDER BY g.updated_at DESC LIMIT 1
+              ),
               'online', EXISTS (
                 SELECT 1 FROM account_sessions s
                 WHERE s.account_id = a.id

@@ -392,6 +392,8 @@
       if (keyboard) return keyboard;
       const quick = doc.getElementById('controllerQuickMenu');
       if (quick) return quick;
+      const accountMenu = doc.getElementById('cornerAccountDialog');
+      if (accountMenu && visible(accountMenu)) return accountMenu;
       const scrims = Array.from(doc.querySelectorAll('.scrim')).filter(visible);
       if (scrims.length) return scrims[scrims.length - 1];
       return doc;
@@ -539,6 +541,11 @@
       }
       if (quickMenuOpen) {
         closeQuickMenu();
+        return;
+      }
+      const accountMenu = doc.getElementById('cornerAccountDialog');
+      if (accountMenu && visible(accountMenu) && typeof root.closeCornerMenu === 'function') {
+        root.closeCornerMenu();
         return;
       }
       const candidates = [
