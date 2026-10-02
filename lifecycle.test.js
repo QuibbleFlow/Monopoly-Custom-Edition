@@ -290,6 +290,7 @@ test('paused matches require every original account and resume the same state, v
 test('only the host can start a waiting lobby with enough players and the engine state is initialized', async () => {
   const db = makeDb();
   const created = await createGame({ account: { id: 'account-a' }, db });
+  assert.equal(db.state.saves.length, 0, 'creating a waiting lobby must not create a save file');
   await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
 
   const notHost = await startGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
@@ -302,6 +303,9 @@ test('only the host can start a waiting lobby with enough players and the engine
   assert.equal(started.version, 1);
   assert.equal(started.state.players.length, 2);
   assert.equal(db.state.states[0].board.spaces.length, 40);
+  assert.equal(db.state.saves.length, 1, 'starting the actual match creates its save slot');
+  assert.equal(db.state.saves[0].source_game_id, created.gameId);
+  assert.equal(db.state.saves[0].version, 1);
 });
 
 test('lobby reads are restricted to members and my-games lists the account memberships', async () => {
@@ -392,6 +396,28 @@ test('state route enforces authentication and membership and returns matching ac
   assert.equal(member.body.version, 2);
   assert.ok(member.body.state.players);
   assert.ok(member.body.events.some(event => event.type === 'DICE_ROLLED'));
+});
+
+test('state polling returns a lightweight unchanged response for the same version and status', async () => {
+  const db = makeDb();
+  const created = await createGame({ account: { id: 'account-a' }, db });
+  await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
+  await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+
+  const result = await getGameState({
+    account: { id: 'account-b' },
+    gameId: created.gameId,
+    sinceVersion: 1,
+    sinceStatus: 'ACTIVE',
+    db,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.unchanged, true);
+  assert.equal(result.version, 1);
+  assert.equal(result.status, 'ACTIVE');
+  assert.equal(result.state, undefined);
+  assert.equal(result.events, undefined);
 });
 
 test('stale versions are rejected and duplicate request IDs do not double execute', async () => {
