@@ -5543,14 +5543,32 @@ function incomingGameInvitationsHTML() {
   </div>`;
 }
 
+function backendSaveRowHTML(save) {
+  const live = backendMyGames.find(game =>
+    (game.gameId || game.id) === save.sourceGameId &&
+    ['ACTIVE', 'PAUSED'].includes(game.status)
+  );
+  const status = live ? live.status : (save.status === 'LOADED' ? 'RESUME READY' : 'SAVED');
+  const action = live
+    ? `backendOpenGame('${esc(live.gameId || live.id)}')`
+    : `backendResumeFromSave('${esc(save.saveId)}')`;
+  const label = live?.status === 'ACTIVE' ? 'Continue'
+    : live?.status === 'PAUSED' ? 'Rejoin'
+    : 'Resume';
+  const updated = new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleString();
+  return `<div class="social-row">
+    <span class="social-name">${esc(save.name)}</span>
+    <span class="tag">${esc(status)}</span>
+    <span class="tag">${(save.players || []).length} players</span>
+    <span class="tag">v${Number(save.version) || 1}</span>
+    <span class="tag">${esc(updated)}</span>
+    <button class="btn alt" onclick="${action}">${label}</button>
+  </div>`;
+}
+
 function renderServerCreateSetup() {
   const saves = backendSaves.length
-    ? backendSaves.map(save => `<div class="social-row">
-        <span class="social-name">${esc(save.name)}</span>
-        <span class="tag">${(save.players || []).length} players</span>
-        <span class="tag">${esc(new Date(save.updatedAt || save.createdAt || Date.now()).toLocaleString())}</span>
-        <button class="btn alt" onclick="backendResumeFromSave('${esc(save.saveId)}')">Resume</button>
-      </div>`).join('')
+    ? backendSaves.map(backendSaveRowHTML).join('')
     : '<p class="muted">No saved matches yet.</p>';
 
   $('app').innerHTML = `<div class="setup">
@@ -5636,9 +5654,7 @@ function renderServerLobbySetup() {
   const savesPanel = backendSaves.length ? `
     <div class="panel acc-green">
       <h2>Saved games</h2>
-      ${backendSaves.map(save => `<div class="social-row"><span class="social-name">${esc(save.name)}</span>
-        <span class="tag">${(save.players || []).length} players</span>
-        <button class="btn alt" onclick="backendResumeFromSave('${esc(save.saveId)}')">Resume</button></div>`).join('')}
+      ${backendSaves.map(backendSaveRowHTML).join('')}
     </div>` : '';
 
   $('app').innerHTML = `<div class="setup">
