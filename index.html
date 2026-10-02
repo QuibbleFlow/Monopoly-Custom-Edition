@@ -1984,10 +1984,28 @@ function manualFocusTarget() {
 // far smaller than a pixel.
 let camLastT = 0;
 let camSettled = false;
+let cameraPlaneElement = null;
+let cameraPlaneWidth = 1;
+let cameraPlaneObserver = null;
+function ensureCameraPlaneMeasurement(plane) {
+  if (!plane || plane === cameraPlaneElement) return;
+  cameraPlaneElement = plane;
+  cameraPlaneWidth = plane.clientWidth || 1;
+  if (cameraPlaneObserver) cameraPlaneObserver.disconnect();
+  if (typeof ResizeObserver !== 'undefined') {
+    cameraPlaneObserver = new ResizeObserver(entries => {
+      const entry = entries[0];
+      const width = entry?.contentRect?.width;
+      if (width && Number.isFinite(width)) cameraPlaneWidth = width;
+    });
+    cameraPlaneObserver.observe(plane);
+  }
+}
 function cameraTick(t) {
   const plane = $('plane');
   if (plane) {
-    const cfg = tiltOn ? CAM.tilt : CAM.flat, W = plane.offsetWidth || 1;
+    ensureCameraPlaneMeasurement(plane);
+    const cfg = tiltOn ? CAM.tilt : CAM.flat, W = cameraPlaneWidth || 1;
     if (manualActive) settleOrientZone(t);
     const target = manualActive ? poseFor(cfg, manualFocusTarget(), manualZoom, W) : autoTarget;
     const tau = manualActive ? 90 : (autoTarget.tau || 200);
@@ -2511,11 +2529,13 @@ function startGameTick() {
   gameTickInterval = setInterval(() => {
     if (!game) return;
 
-    // Countdown text is presentation-only and stays smooth on every client.
-    if (!game.paused && (game.tradeTimerEnd || game.viewTrade)) updateDock();
-    if (game.over || game.paused) return;
-
     const now = Date.now();
+    // Countdown text is presentation-only. Update only the two text nodes
+    // that change instead of rebuilding the entire dock twice per second.
+    // Replacing the dock DOM repeatedly was causing visible FPS drops while
+    // the 3D board was animating.
+    if (!game.paused && (game.tradeTimerEnd || game.viewTrade)) updateLiveCountdowns(now);
+    if (game.over || game.paused) return;
     const timerDue = !!(game.tradeTimerEnd && now >= game.tradeTimerEnd);
     const viewDue = !!(game.viewTrade && now >= game.viewTrade.expiresAt);
     if (!timerDue && !viewDue) return;
@@ -3076,7 +3096,37 @@ function tradeReviewBtnHTML() {
 function tradeTimerBadge() {
   if (!game.tradeTimerEnd || game.paused) return '';
   const secs = Math.max(0, Math.ceil((game.tradeTimerEnd - Date.now()) / 1000));
-  return `<span class="trade-timer ${secs <= 15 ? 'low' : ''}">THINKING TIME: ${secs}s</span>`;
+  return `<span id="tradeTimerBadge" class="trade-timer ${secs <= 15 ? 'low' : ''}">THINKING TIME: ${secs}s</span>`;
+}
+
+let lastPresentedTimerSecond = null;
+let lastPresentedTradeViewSecond = null;
+function updateLiveCountdowns(now = Date.now()) {
+  if (!game) return;
+  if (game.tradeTimerEnd && !game.paused) {
+    const secs = Math.max(0, Math.ceil((game.tradeTimerEnd - now) / 1000));
+    if (secs !== lastPresentedTimerSecond) {
+      lastPresentedTimerSecond = secs;
+      const badge = $('tradeTimerBadge');
+      if (badge) {
+        badge.textContent = `THINKING TIME: ${secs}s`;
+        badge.classList.toggle('low', secs <= 15);
+      }
+    }
+  } else {
+    lastPresentedTimerSecond = null;
+  }
+
+  if (game.viewTrade) {
+    const secs = Math.max(0, Math.ceil((game.viewTrade.expiresAt - now) / 1000));
+    if (secs !== lastPresentedTradeViewSecond) {
+      lastPresentedTradeViewSecond = secs;
+      const button = $('viewTradeBtn');
+      if (button) button.textContent = `View Trade (${secs}s)`;
+    }
+  } else {
+    lastPresentedTradeViewSecond = null;
+  }
 }
 // Only the backend-authoritative host ever sees the Save Game control --
 // this mirrors exactly the host check saveGame() itself enforces
@@ -3163,7 +3213,7 @@ function updatePauseOverlay() {
 function viewTradeBtnHTML() {
   if (!game.viewTrade) { ui.viewingTrade = false; return ''; }
   const secs = Math.max(0, Math.ceil((game.viewTrade.expiresAt - Date.now()) / 1000));
-  return `<button class="dbtn view-trade-btn" onclick="toggleViewTrade()">View Trade (${secs}s)</button>`;
+  return `<button id="viewTradeBtn" class="dbtn view-trade-btn" onclick="toggleViewTrade()">View Trade (${secs}s)</button>`;
 }
 function toggleViewTrade() { ui.viewingTrade = !ui.viewingTrade; render(); }
 function viewTradeHTML() {
