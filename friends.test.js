@@ -59,9 +59,14 @@ function makeFriendsDb() {
       return [{ account_low: pair[0], account_high: pair[1] }];
     }
 
-    if (query.startsWith('INSERT INTO friend_requests (sender_id, recipient_id) VALUES ($1, $2) RETURNING')) {
+    if (query.startsWith('INSERT INTO friend_requests (sender_id, recipient_id) VALUES ($1, $2)')) {
       const senderId = values[0];
       const recipientId = values[1];
+      const pair = [senderId, recipientId].sort().join(':');
+      if (requests.some(request => request.status === 'pending' &&
+          [request.sender_id, request.recipient_id].sort().join(':') === pair)) {
+        return [];
+      }
       requestId++;
       const request = {
         id: `30000000-0000-4000-8000-${String(requestId).padStart(12, '0')}`,
