@@ -195,6 +195,10 @@ function closeFriendsScreen() {
 }
 
 async function loadFriendsScreen() {
+  const searchInput = document.getElementById('friendSearchInput');
+  const searchWasFocused = setup.screen === 'friends' && document.activeElement === searchInput;
+  if (searchInput) friendsScreenState.query = searchInput.value;
+
   try {
     const social = await accountRequest('/api/friends/snapshot');
     friendsScreenState.friends = social.friends || [];
@@ -205,7 +209,12 @@ async function loadFriendsScreen() {
   } catch (error) {
     friendsScreenState.status = error.message;
   }
-  if (setup.screen === 'friends') renderFriendsScreen();
+
+  // The Friends screen refreshes in the background every few seconds.
+  // Replacing #app while the player is typing destroys the live <input>,
+  // clears its unsaved text, and steals focus. Keep the fresh social data
+  // in memory, but wait to redraw until the player is done typing.
+  if (setup.screen === 'friends' && !searchWasFocused) renderFriendsScreen();
 }
 
 function renderFriendsScreen() {
@@ -241,7 +250,7 @@ function renderFriendsScreen() {
     <p class="sub">Friends</p>
     <div class="panel acc-blue"><h2>Find a player</h2>
       <form class="account-row" onsubmit="searchFriendAccounts(event)">
-        <input type="search" name="query" minlength="2" maxlength="24" value="${esc(friendsScreenState.query)}" placeholder="Username" required>
+        <input id="friendSearchInput" type="search" name="query" minlength="2" maxlength="24" value="${esc(friendsScreenState.query)}" placeholder="Username" autocomplete="off" oninput="friendsScreenState.query=this.value" required>
         <button class="btn" type="submit">Search</button>
       </form><div class="social-list">${results}</div>
     </div>
@@ -255,7 +264,8 @@ function renderFriendsScreen() {
 
 async function searchFriendAccounts(event) {
   event.preventDefault();
-  friendsScreenState.query = new FormData(event.currentTarget).get('query').trim();
+  const liveInput = event.currentTarget.querySelector('[name="query"]');
+  friendsScreenState.query = (liveInput ? liveInput.value : new FormData(event.currentTarget).get('query')).trim();
   friendsScreenState.status = 'Searching...';
   renderFriendsScreen();
   try {
