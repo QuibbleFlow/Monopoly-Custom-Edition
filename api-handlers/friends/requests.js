@@ -88,11 +88,59 @@ module.exports = async function friendRequests(req, res, deps = {}) {
 
       const rows = await tx`INSERT INTO friend_requests (sender_id, recipient_id)
         VALUES (${account.id}, ${target.id})
+        ON CONFLICT DO NOTHING
         RETURNING id, sender_id, recipient_id, status, created_at`;
-      return {
-        status: 201,
-        body: { ok: true, request: rows[0], message: `Friend request sent to ${target.username}.` },
-      };
+      if (rows[0]) {
+        return {
+          status: 201,
+          body: { ok: true, request: rows[0], message: `Friend request sent to ${target.username}.` },
+        };
+      }
+
+      // Another request may have been created at the exact same time on the
+      // other device. Resolve that race as a normal idempotent result instead
+      // of leaking a uniqueness error as a 500.
+      const racedPendingRows = await tx`SELECT id, sender_id, recipient_id, status, created_at
+        FROM friend_requests
+        WHERE status = 'pending'
+          AND LEAST(sender_id, recipient_id) = LEAST(${target.id}::uuid, ${account.id}::uuid)
+          AND GREATEST(sender_id, recipient_id) = GREATEST(${target.id}::uuid, ${account.id}::uuid)
+        FOR UPDATE`;
+      const racedPending = racedPendingRows[0];
+      if (racedPending) {
+        if (racedPending.sender_id === account.id) {
+          return {
+            status: 200,
+            body: { ok: true, alreadyPending: true, request: racedPending, message: 'Friend request already sent.' },
+          };
+        }
+        await tx`UPDATE friend_requests
+          SET status = ${'accepted'}, responded_at = now()
+          WHERE id = ${racedPending.id} AND status = 'pending'`;
+        await tx`INSERT INTO friendships (account_low, account_high)
+          VALUES (
+            LEAST(${target.id}::uuid, ${account.id}::uuid),
+            GREATEST(${target.id}::uuid, ${account.id}::uuid)
+          )
+          ON CONFLICT DO NOTHING`;
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            autoAccepted: true,
+            request: { ...racedPending, status: 'accepted' },
+            message: `You and ${target.username} are now friends.`,
+          },
+        };
+      }
+
+      const racedFriends = await tx`SELECT 1 FROM friendships
+        WHERE account_low = LEAST(${target.id}::uuid, ${account.id}::uuid)
+          AND account_high = GREATEST(${target.id}::uuid, ${account.id}::uuid)`;
+      if (racedFriends[0]) {
+        return { status: 200, body: { ok: true, alreadyFriends: true, message: 'You are already friends.' } };
+      }
+      return { status: 409, body: { error: 'That friend request changed while it was being sent. Try again.' } };
     };
 
     const outcome = typeof sql.begin === 'function'
