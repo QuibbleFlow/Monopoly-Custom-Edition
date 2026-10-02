@@ -25,7 +25,7 @@ function boardHandlers() {
     const module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, file), 'utf8'), {
       module, console,
-      require: () => ({ ...account, database: () => sql, requireAccount: async () => ({ id: 'owner' }), requireSameOrigin: () => true }),
+      require: name => name === '../../lib/custom-boards' ? require('./lib/custom-boards') : name === '../../game-cards' ? require('./game-cards') : ({ ...account, database: () => sql, requireAccount: async () => ({ id: 'owner' }), requireSameOrigin: () => true }),
     }, { filename: file });
     return module.exports;
   }
@@ -80,4 +80,30 @@ test('create and edit reject invalid square IDs and invalid names', async () => 
     await handlers.edit({ method: 'PATCH', query: { id: handlers.id }, body: { propertyNames } }, updated);
     assert.equal(updated.statusCode, 400);
   }
+});
+
+
+test('custom decks survive create, reopen, name replacement, and deck-only edits', async () => {
+  const handlers = boardHandlers();
+  const decks = require('./game-cards').defaultDecks();
+  decks.chance[0] = { text: 'Bonus', action: 'money', value: 321 };
+  const created = response();
+  await handlers.create({ method: 'POST', body: { name: 'Cards', cardDecks: decks } }, created);
+  assert.equal(created.statusCode, 201);
+  assert.equal(created.body.board.card_decks.chance[0].value, 321);
+  const names = response();
+  await handlers.edit({ method: 'PATCH', query: { id: handlers.id }, body: { propertyNames: { 0: 'Start' }, replacePropertyNames: true } }, names);
+  assert.equal(names.body.board.card_decks.chance[0].value, 321);
+  decks.chest = [{ text: 'New rule', action: 'rule', rule: 'jailFine', value: 10 }];
+  const edited = response();
+  await handlers.edit({ method: 'PATCH', query: { id: handlers.id }, body: { cardDecks: decks } }, edited);
+  assert.equal(edited.statusCode, 200);
+  const reopened = response();
+  await handlers.edit({ method: 'GET', query: { id: handlers.id } }, reopened);
+  assert.equal(reopened.body.board.card_decks.chest.length, 1);
+  assert.equal(reopened.body.board.card_decks.chest[0].value, 10);
+  assert.deepEqual(Object.keys(reopened.body.board.property_names), ['0']);
+  const invalid = response();
+  await handlers.edit({ method: 'PATCH', query: { id: handlers.id }, body: { cardDecks: { chance: [], chest: [] } } }, invalid);
+  assert.equal(invalid.statusCode, 400);
 });

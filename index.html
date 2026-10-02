@@ -1296,6 +1296,47 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
   .pill .avatar { width: 34px; height: 34px; font-size: 1rem; }
   .pill .pmoney { font-size: 1.15rem; }
 }
+
+.card-deck-section{margin-top:28px;text-align:left}
+.card-deck-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.card-deck-heading h2,.card-deck-heading h3{margin:0 0 8px}
+.card-deck-heading p{line-height:1.6;margin:0}
+.card-deck-section>.card-deck-heading .muted{color:#d1e6d8}
+.card-deck-footer{display:flex;align-items:center;gap:18px;margin-top:16px;flex-wrap:wrap}
+.card-rule-note{font-size:13px;line-height:1.6;color:#d1e6d8;margin:14px 0 20px}
+.card-deck-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.card-deck-panel{min-width:0;--accent-bar:#d69635}
+.card-deck-panel.chest{--accent-bar:#27878a}
+.card-deck-count{font-size:12px;color:#6c7971;font-weight:normal}
+.card-editor-list{list-style:none;padding:0;margin:16px 0}
+.card-editor-list li{margin-bottom:9px}
+.card-editor-item{border:1px solid #dbe3dd;border-radius:12px;background:#f8faf8;overflow:hidden}
+.card-editor-item[open]{border-color:#5f9474;background:#fff}
+.card-editor-item summary{display:flex;align-items:center;gap:10px;padding:14px;cursor:pointer;list-style:none}
+.card-editor-item summary::-webkit-details-marker{display:none}
+.card-editor-item summary>span:nth-child(2){flex:1;min-width:0}
+.card-number{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;background:#e7eee8;color:#486250;border-radius:50%;font-size:12px;font-weight:700}
+.card-text-preview{display:block;font-size:14px;line-height:1.4;overflow-wrap:anywhere}
+.card-effect-preview{display:block;margin-top:5px;color:#63736a;font-size:12px;line-height:1.4}
+.card-edit-hint{color:#47725b;font-size:12px}
+.card-editor-form{padding:0 16px 16px;display:grid;gap:9px}
+.card-editor-form label{font-size:13px;font-weight:600;text-align:left}
+.card-editor-form input,.card-editor-form textarea,.card-editor-form select{width:100%;min-width:0;box-sizing:border-box;padding:10px 12px;border:1px solid #cdd8d0;border-radius:8px;background:#fff;color:#243a2d;font:inherit}
+.card-editor-form textarea{resize:vertical}
+.card-editor-form .card-checkbox{display:flex;align-items:flex-start;gap:9px;line-height:1.5;font-weight:400}
+.card-checkbox input{width:auto;margin-top:3px}
+.card-editor-tools{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.card-editor-tools .btn{padding:8px 10px}
+.card-deck-panel>.btn{width:100%}
+
+@media(max-width:800px){.card-deck-grid{grid-template-columns:1fr}
+.card-deck-heading{flex-wrap:wrap}
+.card-deck-panel{padding:16px}
+.card-editor-item summary{padding:12px}
+.card-edit-hint{display:none}
+}
+
+
 </style>
 </head>
 
@@ -1638,14 +1679,14 @@ function inkFor(hex) {
   return 1.05 / (L + 0.05) > (L + 0.05) / 0.056 ? '#fff' : '#111';
 }
 
-function newGame(names, colors, boardNames = {}, accountIds = []) {
+function newGame(names, colors, boardNames = {}, accountIds = [], cardDecks) {
   // Player "id" is a fixed seat number (0 = host, 1..7 = guests in join
   // order) that never changes. Turn ORDER is a separate shuffled list of
   // ids called turnOrder; game.current is an index into turnOrder, not a
   // player id. This keeps each person's seat stable in online play even
   // though who goes first is random.
   game = MonopolyGameEngine.createState({
-    names, colors: colors || PLAYER_COLORS, accountIds, boardNames,
+    names, colors: colors || PLAYER_COLORS, accountIds, boardNames, cardDecks,
     boardSize: BOARD_SIZE, startMoney: START_MONEY,
   });
 }
@@ -2345,8 +2386,8 @@ async function moveForward(p, steps) {
   for (let i = 0; i < steps; i++) {
     const events = await stepTo(playerId, 1, ms);
     if (events.some(event => event.type === 'GO_SALARY_COLLECTED')) {
-      log(`${p.name} passes GO and collects ${fmt(GO_SALARY)}.`);
-      showGameCallout({ icon: '💵', title: 'PASS GO!', subtitle: `${p.name} collects ${fmt(GO_SALARY)}.`, kind: 'green', duration: 1350 });
+      log(`${p.name} passes GO and collects ${fmt(game?.rules?.goSalary ?? GO_SALARY)}.`);
+      showGameCallout({ icon: '💵', title: 'PASS GO!', subtitle: `${p.name} collects ${fmt(game?.rules?.goSalary ?? GO_SALARY)}.`, kind: 'green', duration: 1350 });
       render();
     }
   }
@@ -2460,7 +2501,7 @@ async function rollDice() {
       log(`${p.name} rolled doubles and leaves jail.`);
       await doMove(active, a + b);
     } else if (result.events.some(event => event.type === 'JAIL_FINE_DUE')) {
-      log(`${p.name} pays ${fmt(JAIL_FINE)} after 3 tries.`);
+      log(`${p.name} pays ${fmt(game?.rules?.jailFine ?? JAIL_FINE)} after 3 tries.`);
       presentPaymentEvents(result.events);
       if (result.events.some(event => event.type === 'MOVE_REQUESTED')) await doMove(game.players[p.id], a + b);
     } else if (result.events.some(event => event.type === 'JAIL_ROLL_FAILED')) {
@@ -2593,7 +2634,7 @@ async function land(p) {
         await sendToJail(game.players[p.id]);
         break;
       case 'CARD_DRAW_REQUESTED':
-        await drawCard(game.players[p.id], event.deck === 'chance' ? CHANCE_CARDS : CHEST_CARDS,
+        await drawCard(game.players[p.id], game.cardDecks?.[event.deck] || (event.deck === 'chance' ? CHANCE_CARDS : CHEST_CARDS),
           event.deck === 'chance' ? 'Chance' : 'Community Chest');
         break;
     }
@@ -2611,11 +2652,11 @@ async function drawCard(p, deck, label) {
   for (const event of result.events) {
     if (event.type === 'CARD_MOVEMENT_REQUESTED') {
       const active = game.players[event.playerId];
-      if (event.direction > 0) await moveToSquare(active, event.target);
+      if (event.direction > 0) await moveForward(active, event.steps);
       else await moveBackward(active, event.steps);
       const landed = game.players[event.playerId];
       log(`${landed.name} lands on ${spaceLabel(landed.pos)}.`);
-      await land(landed);
+      if (game.landingPending) await land(landed);
     } else if (event.type === 'PLAYER_JAILED') {
       await animateJail(event.playerId);
     }
@@ -2644,7 +2685,7 @@ function payJailFine() {
   const p = cur();
   if (busy) return;
   if (!applyGameAction({ type: 'PAY_JAIL_FINE', playerId: p.id })) return;
-  log(`${p.name} paid ${fmt(JAIL_FINE)} and leaves jail.`);
+  log(`${p.name} paid ${fmt(game?.rules?.jailFine ?? JAIL_FINE)} and leaves jail.`);
   render();
 }
 
@@ -2744,6 +2785,8 @@ function stopGameTick() { if (gameTickInterval) { clearInterval(gameTickInterval
 function presentPaymentEvents(events) {
   for (const event of events) {
     const p = game.players[event.playerId];
+    if (event.type === 'CARD_RULE_CHANGED') log(`New rule for everyone: ${MonopolyCards.rules[event.rule].label} is now ${event.value}.`);
+    if (event.type === 'CARD_MONEY_COLLECTED') log(`${p.name} collects ${fmt(event.amount)} from the bank.`);
     if (event.type === 'HOUSE_FORCED_SOLD') log(`${p.name} was forced to sell a house on ${spaceLabel(event.position)}.`);
     if (event.type === 'PROPERTY_FORCED_MORTGAGED') log(`${p.name} was forced to mortgage ${spaceLabel(event.position)}.`);
     if (event.type === 'DEBT_CREATED') log(`${p.name} owes ${fmt(event.amount)} but has ${fmt(p.money)}. Raise cash by mortgaging or selling houses.`);
@@ -3261,7 +3304,7 @@ function updateDock() {
   } else if (game.phase === 'roll') {
     const label = backendMode && authoritativeRollRequest ? 'Retry Roll' : 'Roll';
     primary = `<button class="primary" ${rollIdle ? '' : 'disabled'} onclick="${rollHandler}">${label} ${DICE_ICON}</button>`;
-    if (p.inJail) primary += `<button class="dbtn" ${idle && p.money >= JAIL_FINE ? '' : 'disabled'} onclick="act('payJailFine')">Pay ${fmt(JAIL_FINE)} to leave jail</button>`;
+    if (p.inJail) primary += `<button class="dbtn" ${idle && p.money >= (game?.rules?.jailFine ?? JAIL_FINE) ? '' : 'disabled'} onclick="act('payJailFine')">Pay ${fmt(game?.rules?.jailFine ?? JAIL_FINE)} to leave jail</button>`;
   } else if (game.phase === 'after') {
     primary = `<button class="primary" ${idle ? '' : 'disabled'} onclick="act('endTurnClick')">End turn</button>`;
   } else if (game.phase === 'debt' && game.debt) {
@@ -3631,7 +3674,7 @@ function deedHTML(pos) {
 }
 function specialText(s) {
   const notes = {
-    go: `Collect ${fmt(GO_SALARY)} every time you pass.`, jail: 'Just visiting, unless you were sent here.',
+    go: `Collect ${fmt(game?.rules?.goSalary ?? GO_SALARY)} every time you pass.`, jail: 'Just visiting, unless you were sent here.',
     parking: 'Nothing happens. A free rest.', gotojail: 'Go straight to jail.',
     chance: 'Draw a Chance card.', chest: 'Draw a Community Chest card.', tax: `Pay ${fmt(s.amount || 0)} to the bank.`,
   };
@@ -4324,7 +4367,7 @@ async function hostStartOnline() {
   const names = seats.map(r => r.name);
   const colors = seats.map((r, i) => PLAYER_COLORS[i]);
   const accountIds = seats.map(r => r.accountId || null);
-  await hostRun('beginGame', [names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, accountIds], net.myPid);
+  await hostRun('beginGame', [names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, accountIds, selectedHostBoard?.card_decks], net.myPid);
 }
 // Lets the host force an unresponsive (disconnected) player's turn to
 // end, so the game is not stuck waiting for someone who is gone.
@@ -4797,7 +4840,7 @@ function setName(i, v) { setup.names[i] = v; }   // no redraw so typing is not i
 async function startGame() {
   const names = setup.names.slice(0, setup.count).map((n, i) => n.trim() || `Player ${i + 1}`);
   const colors = names.map((n, i) => PLAYER_COLORS[i]);
-  await beginGame(names, colors, selectedHostBoard ? selectedHostBoard.property_names : {});
+  await beginGame(names, colors, selectedHostBoard ? selectedHostBoard.property_names : {}, [], selectedHostBoard?.card_decks);
 }
 // Shared by local play and online play: players keep their seat (id 0..n-1)
 // in the order given; turnOrder is a random shuffle of who goes first.
@@ -4805,13 +4848,13 @@ async function startGame() {
 // function, shuffle and reveal animation included, can be replayed
 // identically on every guest's screen; see the online randomness shim
 // near the top of the script and hostRun/guestReplay in SECTION 15.
-async function beginGame(names, colors, boardNames = {}, accountIds = []) {
+async function beginGame(names, colors, boardNames = {}, accountIds = [], cardDecks) {
   const order = names.map((n, i) => i);
   for (let i = order.length - 1; i > 0; i--) {            // shuffle: this is the new turn order
     const j = Math.floor(await rnd() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
-  newGame(names, colors, boardNames, accountIds); // players stay in their given seats
+  newGame(names, colors, boardNames, accountIds, cardDecks); // players stay in their given seats
   if (!applyGameAction({ type: 'SET_TURN_ORDER', order })) throw new Error('The starting turn order is invalid.');
   log(`Game started. ${cur().name} goes first.`);
   attachGame();
@@ -6051,7 +6094,7 @@ function howToPlayHTML() {
         <li><b>Manage properties</b> flies the camera to each property you own. Build houses or mortgage from there. A mortgaged property earns no rent until you unmortgage it (mortgage plus 10 percent).</li>
         <li><b>View deeds</b> shows anyone's title deeds. <b>Trade</b> swaps cash and properties with another player.</li>
         <li>Doubles give you another roll. Three doubles in a row sends you to jail.</li>
-        <li>Passing GO pays ${fmt(GO_SALARY)}.</li>
+        <li>Passing GO pays ${fmt(game?.rules?.goSalary ?? GO_SALARY)}.</li>
         <li>If you owe more than you have, raise cash or go bankrupt. Last player left wins.</li>
         <li>The top bar switches sound, camera zoom, and 3D or flat view.</li>
       </ol>

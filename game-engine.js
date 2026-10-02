@@ -1,8 +1,8 @@
 (function (root, factory) {
-  const engine = factory();
+  const engine = factory(typeof module !== 'undefined' && module.exports ? require('./game-cards.js') : root.MonopolyCards);
   if (typeof module !== 'undefined' && module.exports) module.exports = engine;
   if (root) root.MonopolyGameEngine = engine;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (cards) {
   'use strict';
 
   const DEFAULT_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0',
@@ -21,6 +21,8 @@
     }
     return {
       boardNames: { ...boardNames },
+      cardDecks: cards.normalizeDecks(options.cardDecks),
+      rules: {},
       players: names.map((name, id) => ({
         id,
         name,
@@ -119,6 +121,10 @@
   }
 
   function calcRent(state, spaces, position) {
+    return Math.round(baseRent(state, spaces, position) * (state.rules?.rentMultiplier ?? 1));
+  }
+
+  function baseRent(state, spaces, position) {
     const space = spaces[position];
     const ownerId = state.owners[position];
     if (!space || ownerId == null) return 0;
@@ -250,7 +256,7 @@
     if (!player || player.bankrupt || state.over || state.paused || !state.started) return actions;
     if (state.phase === 'roll') {
       actions.push({ type: 'ROLL_DICE', playerId: player.id });
-      if (player.inJail && player.money >= (options.jailFine || 50)) actions.push({ type: 'PAY_JAIL_FINE', playerId: player.id });
+      if (player.inJail && player.money >= (state.rules?.jailFine ?? options.jailFine ?? 50)) actions.push({ type: 'PAY_JAIL_FINE', playerId: player.id });
     } else if (state.phase === 'buy') {
       actions.push({ type: 'DECLINE_PROPERTY', playerId: player.id });
       const space = spaces[player.pos];
@@ -299,9 +305,9 @@
   function applyAction(inputState, action, options = {}) {
     const state = cloneState(inputState);
     const spaces = options.spaces || [];
-    const jailFine = options.jailFine == null ? 50 : options.jailFine;
+    const jailFine = state.rules?.jailFine ?? options.jailFine ?? 50;
     const jailPosition = options.jailPosition == null ? 10 : options.jailPosition;
-    const goSalary = options.goSalary == null ? 200 : options.goSalary;
+    const goSalary = state.rules?.goSalary ?? options.goSalary ?? 200;
     const interest = options.mortgageInterest == null ? 0.1 : options.mortgageInterest;
     const events = [];
     const fail = message => ({ state: inputState, events: [], error: message });
@@ -364,9 +370,9 @@
       emit('AUCTION_STARTED', { position, firstPlayerId: order[0] });
     }
 
-    function requestMovement(playerId, steps, direction, source, target = null) {
-      state.pendingMove = steps > 0 ? { playerId, steps, direction, source, target } : null;
-      state.landingPending = steps === 0;
+    function requestMovement(playerId, steps, direction, source, target = null, card = {}) {
+      state.pendingMove = steps > 0 ? { playerId, steps, direction, source, target, collectGo: card.collectGo !== false, resolveLanding: card.resolveLanding !== false } : null;
+      state.landingPending = steps === 0 && card.resolveLanding !== false;
       emit('MOVE_REQUESTED', { playerId, steps, direction, source, target });
     }
 
@@ -530,10 +536,10 @@
         movement.steps--;
         if (movement.steps === 0) {
           state.pendingMove = null;
-          state.landingPending = true;
+          state.landingPending = movement.resolveLanding !== false;
         }
         emit('PLAYER_MOVED', { playerId: active.id, from, to, direction: action.direction, remaining: movement.steps });
-        if (action.direction === 1 && to === 0) {
+        if (action.direction === 1 && to === 0 && movement.collectGo !== false) {
           active.money += goSalary;
           emit('GO_SALARY_COLLECTED', { playerId: active.id, amount: goSalary });
         }
@@ -573,8 +579,9 @@
             emit('LANDING_OWN_PROPERTY', { playerId: active.id, position: landingPosition });
           }
         } else if (space.type === 'tax') {
-          emit('TAX_DUE', { playerId: active.id, position: landingPosition, amount: space.amount });
-          payMoney(active.id, space.amount, null, false);
+          const amount = Math.round(space.amount * (state.rules?.taxMultiplier ?? 1));
+          emit('TAX_DUE', { playerId: active.id, position: landingPosition, amount });
+          payMoney(active.id, amount, null, false);
         } else if (space.type === 'gotojail') {
           emit('LANDING_GO_TO_JAIL', { playerId: active.id, position: landingPosition, jailPosition });
         } else if (space.type === 'chance' || space.type === 'chest') {
@@ -585,10 +592,13 @@
         break;
       }
       case 'APPLY_CARD': {
-        const card = action.card, active = player(actorId);
+        let card;
+        try { card = cards.normalizeCard(action.card, false); } catch (error) { return fail(error.message); }
+        const active = player(actorId);
         if (!checkCurrent(actorId) || state.phase !== 'roll' || state.pendingMove || state.landingPending || !card || typeof card.action !== 'string') return fail('That card effect is invalid.');
         emit('CARD_DRAWN', { playerId: active.id, action: card.action, value: card.value == null ? null : card.value });
-        if (card.action === 'money') {
+        if (card.action === 'money' || card.action === 'moneyPercentage') {
+          if (card.action === 'moneyPercentage') card.value = Math.round(active.money * card.value / 100);
           if (card.value >= 0) {
             active.money += card.value;
             emit('CARD_MONEY_COLLECTED', { playerId: active.id, amount: card.value });
@@ -598,12 +608,30 @@
         } else if (card.action === 'moveTo') {
           if (!Number.isInteger(card.value) || card.value < 0 || card.value >= state.owners.length) return fail('The card destination is invalid.');
           const steps = (card.value - active.pos + state.owners.length) % state.owners.length;
-          requestMovement(active.id, steps, 1, 'card', card.value);
+          requestMovement(active.id, steps, 1, 'card', card.value, card);
           emit('CARD_MOVEMENT_REQUESTED', { playerId: active.id, target: card.value, direction: 1, steps });
         } else if (card.action === 'moveBack') {
           if (!Number.isInteger(card.value) || card.value < 0) return fail('The card movement distance is invalid.');
-          requestMovement(active.id, card.value, -1, 'card');
+          requestMovement(active.id, card.value, -1, 'card', null, card);
           emit('CARD_MOVEMENT_REQUESTED', { playerId: active.id, target: null, direction: -1, steps: card.value });
+        } else if (card.action === 'moveForward' || card.action === 'moveNearest') {
+          let steps = card.value;
+          if (card.action === 'moveNearest') {
+            steps = 1;
+            while (steps <= spaces.length && spaces[(active.pos + steps) % spaces.length]?.type !== card.targetType) steps++;
+            if (steps > spaces.length) return fail('No matching destination exists on this board.');
+          }
+          const target = (active.pos + steps) % state.owners.length;
+          requestMovement(active.id, steps, 1, 'card', target, card);
+          emit('CARD_MOVEMENT_REQUESTED', { playerId: active.id, target, direction: 1, steps });
+        } else if (card.action === 'repairs') {
+          const amount = state.houses.reduce((sum, count, index) => sum + (state.owners[index] === active.id ? (count === 5 ? card.hotelCost : count * card.houseCost) : 0), 0);
+          payMoney(active.id, amount, null, false);
+        } else if (card.action === 'rule') {
+          state.rules = { ...(state.rules || {}), [card.rule]: card.value };
+          emit('CARD_RULE_CHANGED', { playerId: active.id, rule: card.rule, value: card.value });
+        } else if (card.action === 'nothing') {
+          // The message is the complete effect.
         } else if (card.action === 'jail') {
           active.pos = jailPosition;
           active.inJail = true;

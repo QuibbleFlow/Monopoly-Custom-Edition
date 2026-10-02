@@ -97,7 +97,7 @@ function resolveRollSequence(initialState, initialEvents, playerId, spaces, rand
     if (!cardRequest) break;
     if (cardDraws >= 12) return { error: 'The card movement chain exceeded the resolution limit.' };
     cardDraws += 1;
-    const deck = cardRequest.deck === 'chance' ? cardData.chance : cardData.chest;
+    const deck = state.cardDecks?.[cardRequest.deck] || (cardRequest.deck === 'chance' ? cardData.chance : cardData.chest);
     const randomIndex = Math.min(deck.length - 1, Math.max(0, Math.floor(random() * deck.length)));
     const card = deck[randomIndex];
     const cardEventStart = events.length;

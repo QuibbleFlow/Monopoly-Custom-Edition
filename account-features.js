@@ -532,7 +532,7 @@ function renderBoardsScreen() {
 }
 
 function createCustomBoard() {
-  boardsScreenState.editor = { id: null, name: 'My Board', property_names: {}, selected: 1 };
+  boardsScreenState.editor = { id: null, name: 'My Board', property_names: {}, card_decks: MonopolyCards.defaultDecks(), selected: 1 };
   setup.screen = 'boardEditor';
   renderBoardEditorScreen();
 }
@@ -540,7 +540,7 @@ function createCustomBoard() {
 function editCustomBoard(id) {
   const board = boardsScreenState.boards.find(item => item.id === id);
   if (!board) return;
-  boardsScreenState.editor = { ...board, property_names: { ...(board.property_names || {}) }, selected: 1 };
+  boardsScreenState.editor = { ...board, property_names: { ...(board.property_names || {}) }, card_decks: MonopolyCards.normalizeDecks(board.card_decks), selected: 1 };
   setup.screen = 'boardEditor';
   renderBoardEditorScreen();
 }
@@ -609,6 +609,7 @@ function renderBoardEditorScreen() {
       <p class="account-status" role="status">${esc(boardsScreenState.status)}</p>
     </div>
     </div>
+    ${renderCardDeckEditor()}
   </div>`;
   fitBoardEditorLabels();
   if (typeof ResizeObserver !== 'undefined') {
@@ -656,12 +657,13 @@ async function saveCustomBoardEditor() {
   updateBoardPropertyName($('selectedPropertyName').value);
   boardsScreenState.status = 'Saving board...';
   try {
-    const body = { name: editor.name, propertyNames: editor.property_names, replacePropertyNames: true };
+    const body = { name: editor.name, propertyNames: editor.property_names, replacePropertyNames: true, cardDecks: MonopolyCards.normalizeDecks(editor.card_decks) };
     const result = await accountRequest(editor.id ? `/api/boards/${encodeURIComponent(editor.id)}` : '/api/boards', {
       method: editor.id ? 'PATCH' : 'POST', body: JSON.stringify(body),
     });
-    boardsScreenState.editor = { ...result.board, property_names: { ...(result.board.property_names || {}) }, selected: editor.selected };
-    boardsScreenState.status = 'Board saved to your account.';
+    boardsScreenState.editor = { ...result.board, property_names: { ...(result.board.property_names || {}) }, card_decks: MonopolyCards.normalizeDecks(result.board.card_decks), selected: editor.selected };
+    if (selectedHostBoard?.id === result.board.id) selectedHostBoard = result.board;
+    boardsScreenState.status = 'Board and cards saved to your account.';
     const list = await accountRequest('/api/boards');
     boardsScreenState.boards = list.boards || [];
   } catch (error) { boardsScreenState.status = error.message; }
@@ -706,4 +708,92 @@ function selectClassicBoard() {
   selectedHostBoard = null;
   setup.screen = boardsScreenState.selectingForHost ? 'host' : '';
   renderSetup();
+}
+
+
+function cardEffectSummary(card) {
+  const definition = MonopolyCards.actions[card.action];
+  if (card.action === 'moveTo') return `Move to ${editorSpaceLabel(card.value)}`;
+  if (card.action === 'money') return `${card.value < 0 ? 'Pay' : 'Collect'} $${Math.abs(card.value)}`;
+  if (card.action === 'moneyPercentage') return `${card.value < 0 ? 'Pay' : 'Collect'} ${Math.abs(card.value)}% of current cash`;
+  if (card.action === 'rule') return `${MonopolyCards.rules[card.rule].label}: ${card.value}`;
+  if (card.action === 'repairs') return `$${card.houseCost} per house, $${card.hotelCost} per hotel`;
+  if (card.action === 'moveNearest') return `Next ${card.targetType}`;
+  return definition.label + (card.value === undefined ? '' : `: ${card.value}`);
+}
+
+function renderCardDeckEditor() {
+  const editor = boardsScreenState.editor;
+  editor.card_decks ||= MonopolyCards.defaultDecks();
+  return `<section class="card-deck-section" aria-labelledby="cardDeckHeading">
+    <div class="card-deck-heading"><div><h2 id="cardDeckHeading">Make every card your own</h2><p class="muted">Open any card to edit its message and action. Both decks start with every default card. Save board saves all card changes too.</p></div></div>
+    <p class="card-rule-note">Rule cards change the selected rule for everyone for the rest of the game. Movement cards can collect money at GO and trigger the destination’s normal effect. Cards are drawn randomly, with equal chances.</p>
+    <div class="card-deck-grid">${['chest', 'chance'].map(deck => {
+      const list = editor.card_decks[deck];
+      return `<div class="panel card-deck-panel ${deck}"><div class="card-deck-heading"><h3>${deck === 'chest' ? 'Community Chest' : 'Chance'} <span class="card-deck-count">${list.length}/50</span></h3><button class="btn alt small" onclick="resetCardDeck('${deck}')">Restore defaults</button></div>
+      <ol class="card-editor-list">${list.map((card, index) => renderEditableCard(deck, card, index)).join('')}</ol>
+      <button class="btn" ${list.length >= 50 ? 'disabled' : ''} onclick="changeCardList('${deck}',${list.length},'add')">+ Add card</button></div>`;
+    }).join('')}</div>
+    <div class="card-deck-footer"><button class="btn" onclick="saveCustomBoardEditor()">Save board and cards</button><p class="account-status" role="status">${esc(boardsScreenState.status)}</p></div>
+  </section>`;
+}
+
+function renderEditableCard(deck, card, index) {
+  const definition = MonopolyCards.actions[card.action];
+  const prefix = `card-${deck}-${index}`;
+  const field = (key, label, min, max, step = 1) => `<label for="${prefix}-${key}">${esc(label)} <span class="muted">(${min}–${max})</span></label><input id="${prefix}-${key}" type="number" min="${min}" max="${max}" step="${step}" value="${card[key]}" oninput="updateEditorCard('${deck}',${index},'${key}',Number(this.value))">`;
+  return `<li><details class="card-editor-item" data-card="${prefix}" ${boardsScreenState.openCard === prefix ? 'open' : ''} ontoggle="if(this.open) boardsScreenState.openCard='${prefix}'">
+    <summary><span class="card-number">${index + 1}</span><span><strong class="card-text-preview">${esc(card.text)}</strong><span class="card-effect-preview">${esc(cardEffectSummary(card))}</span></span><span class="card-edit-hint">Edit</span></summary>
+    <div class="card-editor-form"><label for="${prefix}-text">Card message</label><textarea id="${prefix}-text" maxlength="500" rows="3" oninput="updateEditorCard('${deck}',${index},'text',this.value)">${esc(card.text)}</textarea>
+    <label for="${prefix}-action">What this card does</label><select id="${prefix}-action" onchange="changeEditorCardAction('${deck}',${index},this.value)">${Object.entries(MonopolyCards.actions).map(([key, action]) => `<option value="${key}" ${key === card.action ? 'selected' : ''}>${esc(action.label)}</option>`).join('')}</select>
+    ${card.action === 'rule' ? `<label for="${prefix}-rule">Rule to change</label><select id="${prefix}-rule" onchange="changeEditorCardRule('${deck}',${index},this.value)">${Object.entries(MonopolyCards.rules).map(([key, rule]) => `<option value="${key}" ${key === card.rule ? 'selected' : ''}>${esc(rule.label)}</option>`).join('')}</select>` : ''}
+    ${Object.entries(definition.fields).map(([key, [label, min, max]]) => card.action === 'moveTo' ? `<label for="${prefix}-value">Destination space</label><select id="${prefix}-value" onchange="updateEditorCard('${deck}',${index},'value',Number(this.value))">${SPACES.map((space, position) => `<option value="${position}" ${position === card.value ? 'selected' : ''}>${position}: ${esc(editorSpaceLabel(position))}</option>`).join('')}</select>` : field(key, label, min, card.action === 'rule' ? MonopolyCards.rules[card.rule].max : max, ['rule', 'moneyPercentage'].includes(card.action) ? '0.01' : 1)).join('')}
+    ${card.action === 'moveNearest' ? `<label for="${prefix}-targetType">Destination type</label><select id="${prefix}-targetType" onchange="updateEditorCard('${deck}',${index},'targetType',this.value)"><option value="railroad" ${card.targetType === 'railroad' ? 'selected' : ''}>Railroad</option><option value="utility" ${card.targetType === 'utility' ? 'selected' : ''}>Utility</option></select>` : ''}
+    ${definition.movement ? `<label class="card-checkbox"><input type="checkbox" ${card.collectGo !== false ? 'checked' : ''} onchange="updateEditorCard('${deck}',${index},'collectGo',this.checked)"> Collect current GO payout when passing GO forward</label><label class="card-checkbox"><input type="checkbox" ${card.resolveLanding !== false ? 'checked' : ''} onchange="updateEditorCard('${deck}',${index},'resolveLanding',this.checked)"> Apply destination effect (rent, tax, another card, etc.)</label>` : ''}
+    <div class="card-editor-tools"><button class="btn alt small" ${index === 0 ? 'disabled' : ''} onclick="changeCardList('${deck}',${index},'up')">Move up</button><button class="btn alt small" ${index === boardsScreenState.editor.card_decks[deck].length - 1 ? 'disabled' : ''} onclick="changeCardList('${deck}',${index},'down')">Move down</button><button class="btn alt small" ${boardsScreenState.editor.card_decks[deck].length >= 50 ? 'disabled' : ''} onclick="changeCardList('${deck}',${index},'duplicate')">Duplicate</button><button class="btn danger small" ${boardsScreenState.editor.card_decks[deck].length <= 1 ? 'disabled' : ''} onclick="changeCardList('${deck}',${index},'remove')">Remove</button></div></div>
+  </details></li>`;
+}
+
+function updateEditorCard(deck, index, key, value) {
+  const card = boardsScreenState.editor.card_decks[deck][index];
+  card[key] = value;
+  const item = document.querySelector(`[data-card="card-${deck}-${index}"]`);
+  if (item) {
+    item.querySelector('.card-text-preview').textContent = card.text;
+    item.querySelector('.card-effect-preview').textContent = cardEffectSummary(card);
+  }
+}
+function changeEditorCardAction(deck, index, action) {
+  const old = boardsScreenState.editor.card_decks[deck][index];
+  const card = { text: old.text, action };
+  for (const [key, [, , , value]] of Object.entries(MonopolyCards.actions[action].fields)) card[key] = value;
+  if (MonopolyCards.actions[action].movement) Object.assign(card, { collectGo: true, resolveLanding: true });
+  if (action === 'moveNearest') card.targetType = 'railroad';
+  if (action === 'rule') card.rule = 'goSalary';
+  boardsScreenState.editor.card_decks[deck][index] = card;
+  boardsScreenState.openCard = `card-${deck}-${index}`;
+  renderBoardEditorScreen();
+}
+function changeEditorCardRule(deck, index, rule) {
+  const card = boardsScreenState.editor.card_decks[deck][index];
+  card.rule = rule;
+  card.value = MonopolyCards.rules[rule].default;
+  renderBoardEditorScreen();
+}
+function changeCardList(deck, index, operation) {
+  const list = boardsScreenState.editor.card_decks[deck];
+  let selected = index;
+  if (operation === 'add' && list.length < 50) list.push({ text: 'Your custom card', action: 'money', value: 50 });
+  if (operation === 'duplicate' && list.length < 50) { list.splice(index + 1, 0, { ...list[index] }); selected++; }
+  if (operation === 'remove' && list.length > 1) { list.splice(index, 1); selected = Math.min(index, list.length - 1); }
+  if (operation === 'up' && index > 0) { [list[index - 1], list[index]] = [list[index], list[index - 1]]; selected--; }
+  if (operation === 'down' && index < list.length - 1) { [list[index + 1], list[index]] = [list[index], list[index + 1]]; selected++; }
+  boardsScreenState.openCard = `card-${deck}-${selected}`;
+  renderBoardEditorScreen();
+}
+function resetCardDeck(deck) {
+  if (!confirm('Restore this deck to its default cards? Your edits to this deck will be replaced.')) return;
+  boardsScreenState.editor.card_decks[deck] = MonopolyCards.defaultDecks()[deck];
+  boardsScreenState.openCard = null;
+  renderBoardEditorScreen();
 }

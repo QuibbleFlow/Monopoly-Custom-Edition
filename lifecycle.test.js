@@ -965,3 +965,55 @@ test('property management validates owners and allows consecutive house purchase
   assert.equal(unmortgaged.version, 7);
   assert.ok(saleOne.ok);
 });
+
+
+test('server draws custom cards from the match snapshot and applies custom rules', async () => {
+  const { db, gameId } = await createActiveGame();
+  editStoredGameState(db, state => {
+    state.cardDecks.chest = [{ text: 'House rule: free jail', action: 'rule', rule: 'jailFine', value: 0 }];
+  });
+  const result = await executeGameAction({
+    account: { id: 'account-a' }, gameId, action: { type: 'ROLL_DICE' }, version: 1,
+    requestId: 'custom-card-rule', sql: db, random: () => 0,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.state.rules.jailFine, 0);
+  assert.ok(result.events.some(event => event.type === 'CARD_DRAWN' && event.text === 'House rule: free jail'));
+  assert.equal(engine.deserializeState(db.state.states[0].state).rules.jailFine, 0);
+  editStoredGameState(db, state => {
+    state.players[0].pos = 0;
+    state.phase = 'roll';
+    state.cardDecks.chest = [{ text: 'My bonus', action: 'money', value: 321 }];
+  });
+  const bonus = await executeGameAction({
+    account: { id: 'account-a' }, gameId, action: { type: 'ROLL_DICE' }, version: 2,
+    requestId: 'custom-card-cash', sql: db, random: () => 0,
+  });
+  assert.equal(bonus.ok, true);
+  assert.equal(bonus.state.players[0].money, 1821);
+});
+
+
+test('starting a selected custom board snapshots its decks independently of future edits', async () => {
+  const base = makeDb();
+  const stored = require('./lib/custom-boards').storedBoard({ 0: 'Launch' }, {
+    chance: [{ text: 'Custom Chance', action: 'money', value: 77 }],
+    chest: [{ text: 'Custom Chest', action: 'nothing' }],
+  });
+  const tx = async (strings, ...values) => {
+    const query = strings.join('?').replace(/\s+/g, ' ').trim();
+    if (query.startsWith('SELECT id, owner_id FROM custom_boards')) return [{ id: 'board-one', owner_id: 'account-a' }];
+    if (query.startsWith('SELECT property_names FROM custom_boards')) return [{ property_names: stored }];
+    return base(strings, ...values);
+  };
+  const db = Object.assign(tx, { begin: async callback => callback(tx) });
+  const created = await createGame({ account: { id: 'account-a' }, selectedBoardId: 'board-one', db });
+  await joinGame({ account: { id: 'account-b' }, gameId: created.gameId, db });
+  const started = await startGame({ account: { id: 'account-a' }, gameId: created.gameId, db });
+  assert.equal(started.ok, true);
+  const snapshot = engine.deserializeState(base.state.states[0].state);
+  assert.deepEqual(snapshot.boardNames, { 0: 'Launch' });
+  assert.equal(snapshot.cardDecks.chance[0].value, 77);
+  stored.__cardDecksV1.chance[0].value = 999;
+  assert.equal(engine.deserializeState(base.state.states[0].state).cardDecks.chance[0].value, 77);
+});

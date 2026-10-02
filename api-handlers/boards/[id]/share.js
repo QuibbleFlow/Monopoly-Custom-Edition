@@ -1,3 +1,4 @@
+const { publicBoard } = require('../../../lib/custom-boards');
 const { database, noStore, parseBody, requireAccount, requireSameOrigin, sendError } = require('../../../lib/account');
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -28,7 +29,7 @@ module.exports = async function shareBoard(req, res) {
         )
       RETURNING id, owner_id, name, property_names, copied_from, created_at, updated_at`;
     if (!rows[0]) return sendError(res, 404, 'Board or friend not found.');
-    return res.status(201).json({ board: rows[0] });
+    return res.status(201).json({ board: publicBoard(rows[0]) });
   } catch (error) {
     console.error('Custom board share failed:', error);
     return sendError(res, 500, 'Could not share that board.');
