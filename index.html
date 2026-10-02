@@ -455,6 +455,86 @@ input:focus-visible {
   100% { transform: scale(.85) translateY(-36px); opacity: 0; }
 }
 
+/* Lightweight "fun" layer. These effects are short lived and use only
+   transform/opacity so they do not bring back the FPS problems caused by
+   repeatedly rebuilding the board. */
+.game-fun-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 195;
+  pointer-events: none;
+  overflow: hidden;
+}
+.game-callout-stack {
+  position: absolute;
+  top: 7vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.game-callout {
+  min-width: min(430px, calc(100vw - 28px));
+  max-width: 560px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 12px;
+  align-items: center;
+  padding: 12px 18px;
+  border: 2px solid rgba(255,255,255,.65);
+  border-radius: 16px;
+  color: #fff;
+  background: #15231b;
+  box-shadow: 0 9px 24px rgba(0,0,0,.34);
+  animation: funCalloutIn .18s ease-out, funCalloutOut .22s ease-in forwards;
+  animation-delay: 0s, var(--fun-out-delay, 1.35s);
+}
+.game-callout.gold { background: linear-gradient(135deg,#8d6500,#d99b00); }
+.game-callout.green { background: linear-gradient(135deg,#0f6c38,#179d53); }
+.game-callout.red { background: linear-gradient(135deg,#7e1420,#c72d39); }
+.game-callout.blue { background: linear-gradient(135deg,#13547a,#1c77a8); }
+.game-callout.purple { background: linear-gradient(135deg,#56318d,#7b4bb2); }
+.game-callout .fun-icon {
+  grid-row: 1 / span 2;
+  font-size: 2rem;
+  line-height: 1;
+}
+.game-callout .fun-title {
+  font-size: clamp(1.05rem, 2.3vw, 1.45rem);
+  font-weight: 1000;
+  letter-spacing: .04em;
+  line-height: 1.05;
+}
+.game-callout .fun-subtitle {
+  font-weight: 750;
+  opacity: .94;
+  font-size: .9rem;
+}
+.game-callout.no-motion { animation: none; }
+@keyframes funCalloutIn {
+  from { transform: translateY(-10px) scale(.94); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes funCalloutOut {
+  to { transform: translateY(-10px) scale(.96); opacity: 0; }
+}
+.fun-particle {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  font-size: 1.2rem;
+  will-change: transform, opacity;
+  animation: funBurst .82s ease-out forwards;
+  animation-delay: var(--delay, 0ms);
+}
+@keyframes funBurst {
+  from { transform: translate(-50%,-50%) scale(.6) rotate(0deg); opacity: 1; }
+  to { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1.1) rotate(var(--rot)); opacity: 0; }
+}
+
 /* THE SCENE (a 3D stage)
    scene-wrap  measures the available width.
    scene       the "room". It has perspective, so tilted things get depth.
@@ -1685,6 +1765,9 @@ function buildHouse(pos) {
   const result = applyGameAction({ type: 'BUY_HOUSE', playerId: p.id, position: pos });
   if (!result) return;
   log(`${p.name} built on ${spaceLabel(pos)} (${houseLabel(game.houses[pos])}).`);
+  if (game.houses[pos] === 5) {
+    showGameCallout({ icon: '🏨', title: 'HOTEL OPEN!', subtitle: `${spaceLabel(pos)} just got expensive.`, kind: 'purple', duration: 1500, burst: true });
+  }
   render();
 }
 function sellHouse(pos) {
@@ -2185,6 +2268,7 @@ async function moveForward(p, steps) {
     const events = await stepTo(playerId, 1, ms);
     if (events.some(event => event.type === 'GO_SALARY_COLLECTED')) {
       log(`${p.name} passes GO and collects ${fmt(GO_SALARY)}.`);
+      showGameCallout({ icon: '💵', title: 'PASS GO!', subtitle: `${p.name} collects ${fmt(GO_SALARY)}.`, kind: 'green', duration: 1350 });
       render();
     }
   }
@@ -2204,6 +2288,10 @@ async function sendToJail(p) {
   await animateJail(p.id);
 }
 async function animateJail(playerId) {
+  const jailedPlayer = game && game.players[playerId];
+  if (jailedPlayer) {
+    showGameCallout({ icon: '🚓', title: 'BUSTED!', subtitle: `${jailedPlayer.name} is going to jail.`, kind: 'red', duration: 1450 });
+  }
   sfx.jail();
   $('tokens').style.setProperty('--step', T(700) + 'ms');
   tokenPos[playerId] = JAIL_POS;
@@ -2287,6 +2375,7 @@ async function rollDice() {
   const rolled = result.events.find(event => event.type === 'DICE_ROLLED');
   const active = game.players[p.id];
   log(`${p.name} rolled ${a} + ${b}${isDouble ? ' (doubles)' : ''}.`);
+  showRollFun({ isDouble, dice: [a, b] }, result.events, p);
 
   if (wasInJail) {
     if (isDouble) {                              // doubles free you, no extra roll
@@ -2461,6 +2550,7 @@ function buyProperty() {
   const result = applyGameAction({ type: 'BUY_PROPERTY', playerId: p.id, position: p.pos });
   if (!result) return;
   log(`${p.name} bought ${spaceLabel(p.pos)} for ${fmt(s.price)}.`);
+  celebrateProperty(p.id, p.pos);
   if (result.events.some(event => event.type === 'DOUBLES_AGAIN')) log('Doubles. Roll again.');
   render();
 }
@@ -2485,7 +2575,10 @@ function finishAction() {
   const result = applyGameAction({ type: 'COMPLETE_ACTION' });
   if (!result) return;
   if (result.events.some(event => event.type === 'DOUBLES_AGAIN')) log('Doubles. Roll again.');
-  if (result.events.some(event => event.type === 'TURN_CHANGED')) log(`${cur().name}'s turn.`);
+  if (result.events.some(event => event.type === 'TURN_CHANGED')) {
+    log(`${cur().name}'s turn.`);
+    showTurnCallout(cur().id);
+  }
   render();
 }
 function endTurnClick() { if (!busy && game.phase === 'after' && !ui.manage) endTurn(); }
@@ -2493,6 +2586,7 @@ function endTurn() {
   const result = applyGameAction({ type: 'END_TURN' });
   if (!result) { render(); return; }
   log(`${cur().name}'s turn.`);
+  showTurnCallout(cur().id);
   render();
 }
 
@@ -2520,7 +2614,10 @@ function gameTick(now = Date.now()) {
   if (result.events.some(event => event.type === 'ACTION_TIMER_EXPIRED') && !busy && !popup && phase === 'buy') {
     log(`${cur().name} ran out of time to decide. Auction time.`);
   }
-  if (result.events.some(event => event.type === 'TURN_CHANGED')) log(`${cur().name}'s turn.`);
+  if (result.events.some(event => event.type === 'TURN_CHANGED')) {
+    log(`${cur().name}'s turn.`);
+    showTurnCallout(cur().id);
+  }
   render();
 }
 let gameTickInterval = null;
@@ -2576,7 +2673,11 @@ function presentPaymentEvents(events) {
       const recipient = event.creditorId == null ? null : game.players[event.creditorId];
       log(`${p.name} is bankrupt${recipient ? ' and hands everything to ' + recipient.name : ''}.`);
     }
-    if (event.type === 'GAME_WON') log(`${p.name} wins the game.`);
+    if (event.type === 'GAME_WON') {
+      log(`${p.name} wins the game.`);
+      showGameCallout({ icon: '👑', title: `${p.name.toUpperCase()} WINS!`, subtitle: 'Monopoly champion.', kind: 'gold', duration: 2600, burst: true });
+      funBurst(['🎉','✨','💵','🏆'], 24);
+    }
   }
 }
 function payDebt() {
@@ -2646,7 +2747,11 @@ function logAuctionResult(events) {
   const ended = events.find(event => event.type === 'AUCTION_ENDED');
   if (!ended) return;
   if (ended.winnerId === null) log(`Nobody bid. ${spaceLabel(ended.position)} stays with the bank.`);
-  else log(`${game.players[ended.winnerId].name} won ${spaceLabel(ended.position)} for ${fmt(ended.amount)}.`);
+  else {
+    const winner = game.players[ended.winnerId];
+    log(`${winner.name} won ${spaceLabel(ended.position)} for ${fmt(ended.amount)}.`);
+    showGameCallout({ icon: '🔨', title: 'SOLD!', subtitle: `${winner.name} wins ${spaceLabel(ended.position)} for ${fmt(ended.amount)}.`, kind: 'gold', duration: 1450 });
+  }
 }
 
 /* =====================================================================
@@ -2907,6 +3012,10 @@ function buildShell() {
     </div>
     <div id="modal"></div>
     <div class="big-money-layer" id="bigMoney"></div>
+    <div id="gameFunLayer" class="game-fun-layer">
+      <div id="gameCallouts" class="game-callout-stack"></div>
+      <div id="gameBurst"></div>
+    </div>
     <div id="pauseOverlay" class="pause-overlay"></div>`;
   initTokens();
   updateTopButtons();
@@ -3654,6 +3763,101 @@ function pillFloat(id, delta) {
   setTimeout(() => el.remove(), T(1500) + 200);
 }
 
+function funBurst(symbols = ['✨','🎉','💵'], count = 12) {
+  if (reduceMotion) return;
+  const layer = $('gameBurst');
+  if (!layer) return;
+  for (let i = 0; i < count; i++) {
+    const particle = document.createElement('span');
+    particle.className = 'fun-particle';
+    particle.textContent = symbols[i % symbols.length];
+    const angle = Math.random() * Math.PI * 2;
+    const distance = 90 + Math.random() * 170;
+    particle.style.setProperty('--dx', Math.cos(angle) * distance + 'px');
+    particle.style.setProperty('--dy', Math.sin(angle) * distance + 'px');
+    particle.style.setProperty('--rot', (Math.random() * 420 - 210) + 'deg');
+    particle.style.setProperty('--delay', Math.round(Math.random() * 80) + 'ms');
+    layer.appendChild(particle);
+    setTimeout(() => particle.remove(), 1050);
+  }
+}
+
+function showGameCallout({ icon = '✨', title = '', subtitle = '', kind = 'gold', duration = 1600, burst = false } = {}) {
+  const stack = $('gameCallouts');
+  if (!stack || !title) return;
+  const card = document.createElement('div');
+  card.className = 'game-callout ' + kind + (reduceMotion ? ' no-motion' : '');
+  card.style.setProperty('--fun-out-delay', Math.max(500, duration - 220) + 'ms');
+
+  const iconEl = document.createElement('div');
+  iconEl.className = 'fun-icon';
+  iconEl.textContent = icon;
+  const titleEl = document.createElement('div');
+  titleEl.className = 'fun-title';
+  titleEl.textContent = title;
+  const subtitleEl = document.createElement('div');
+  subtitleEl.className = 'fun-subtitle';
+  subtitleEl.textContent = subtitle;
+  card.append(iconEl, titleEl, subtitleEl);
+  stack.prepend(card);
+
+  while (stack.children.length > 3) stack.lastElementChild.remove();
+  if (burst) funBurst();
+  setTimeout(() => card.remove(), reduceMotion ? Math.max(900, duration) : duration + 80);
+}
+
+function playerControlsHere(playerId) {
+  if (!game || !game.players[playerId]) return false;
+  if (isBackendAuthoritativeGame()) return backendPlayerMine(playerId);
+  return !!net.role && net.myPid === playerId;
+}
+
+function showTurnCallout(playerId) {
+  if (!game || !game.players[playerId]) return;
+  const p = game.players[playerId];
+  const mine = playerControlsHere(playerId);
+  showGameCallout({
+    icon: mine ? '👉' : '🎩',
+    title: mine ? 'YOUR TURN!' : `${p.name}'s turn`,
+    subtitle: mine ? 'Make it count.' : 'The board is theirs.',
+    kind: mine ? 'green' : 'blue',
+    duration: 1250,
+  });
+}
+
+function showRollFun(roll, events, player) {
+  if (!roll || !roll.isDouble || !player) return;
+  const busted = events.some(event => event.type === 'THREE_DOUBLES_JAIL');
+  const freed = events.some(event => event.type === 'JAIL_RELEASED');
+  showGameCallout({
+    icon: busted ? '🚓' : '🎲',
+    title: busted ? 'THREE DOUBLES!' : 'DOUBLES!',
+    subtitle: busted ? `${player.name} is going straight to jail.`
+      : freed ? `${player.name} is out of jail!`
+      : `${player.name} gets another roll.`,
+    kind: busted ? 'red' : 'gold',
+    duration: 1450,
+    burst: !busted,
+  });
+}
+
+function celebrateProperty(playerId, position) {
+  if (!game || !game.players[playerId] || position == null) return;
+  const player = game.players[playerId];
+  const space = SPACES[position];
+  const fullSet = !!(space && space.type === 'property' && ownsFullSet(playerId, space.group));
+  showGameCallout({
+    icon: fullSet ? '🔥' : '🏠',
+    title: fullSet ? 'COLOR SET COMPLETE!' : 'NEW PROPERTY!',
+    subtitle: fullSet
+      ? `${player.name} owns the full ${space.group} set.`
+      : `${player.name} bought ${spaceLabel(position)}.`,
+    kind: fullSet ? 'purple' : 'green',
+    duration: fullSet ? 1900 : 1350,
+    burst: fullSet,
+  });
+}
+
 // Draws the whole game screen. Called after every change to "game".
 function render() {
   if (!game) { renderSetup(); return; }
@@ -3706,6 +3910,7 @@ async function orderIntro(order, names, colors) {
   }
   if (!ui.intro.skip) await sleep(T(1000));
   ui.intro = null; busy = false; render();
+  if (game && game.turnOrder && game.turnOrder.length) showTurnCallout(game.turnOrder[game.current || 0]);
 }
 function skipIntro() { if (ui.intro) ui.intro.skip = true; }
 
@@ -4526,7 +4731,10 @@ if (window.authoritativeGame) {
       moveCameraReset(T(400));
       await animateDice(roll.dice[0], roll.dice[1]);
       const player = game.players[roll.playerId] || finalGame.players[roll.playerId];
-      if (player) log(`${player.name} rolled ${roll.dice[0]} + ${roll.dice[1]}${roll.isDouble ? ' (doubles)' : ''}.`);
+      if (player) {
+        log(`${player.name} rolled ${roll.dice[0]} + ${roll.dice[1]}${roll.isDouble ? ' (doubles)' : ''}.`);
+        showRollFun(roll, events, player);
+      }
       await presentAuthoritativeTurnEvents(events, roll.playerId);
 
       // Apply the settled snapshot only AFTER the presentation finishes.
@@ -4612,7 +4820,10 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
       await sleep(stepDuration);
     } else if (event.type === 'GO_SALARY_COLLECTED') {
       const player = game.players[event.playerId];
-      if (player) log(`${player.name} passes GO and collects ${fmt(event.amount)}.`);
+      if (player) {
+        log(`${player.name} passes GO and collects ${fmt(event.amount)}.`);
+        showGameCallout({ icon: '💵', title: 'PASS GO!', subtitle: `${player.name} collects ${fmt(event.amount)}.`, kind: 'green', duration: 1350 });
+      }
       render();
     } else if (landingTypes.has(event.type)) {
       const player = game.players[event.playerId];
@@ -4652,7 +4863,10 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
       log('Doubles. Roll again.');
     } else if (event.type === 'TURN_CHANGED') {
       const nextPlayer = game.players[event.playerId];
-      if (nextPlayer) log(`${nextPlayer.name}'s turn.`);
+      if (nextPlayer) {
+        log(`${nextPlayer.name}'s turn.`);
+        showTurnCallout(nextPlayer.id);
+      }
     }
   }
 
@@ -4665,10 +4879,18 @@ function presentAuthoritativeActionEvents(events) {
     const player = event.playerId == null ? null : game.players[event.playerId];
     switch (event.type) {
       case 'PROPERTY_PURCHASED':
-        if (player) log(`${player.name} bought ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+        if (player) {
+          log(`${player.name} bought ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+          celebrateProperty(player.id, event.position);
+        }
         break;
       case 'HOUSE_BUILT':
-        if (player) log(`${player.name} built on ${spaceLabel(event.position)}.`);
+        if (player) {
+          log(`${player.name} built on ${spaceLabel(event.position)}.`);
+          if (game.houses[event.position] === 5) {
+            showGameCallout({ icon: '🏨', title: 'HOTEL OPEN!', subtitle: `${spaceLabel(event.position)} just got expensive.`, kind: 'purple', duration: 1500, burst: true });
+          }
+        }
         break;
       case 'HOUSE_SOLD':
         if (player) log(`${player.name} sold a house on ${spaceLabel(event.position)}.`);
@@ -4693,13 +4915,20 @@ function presentAuthoritativeActionEvents(events) {
         break;
       case 'AUCTION_ENDED':
         if (event.winnerId == null) log(`Nobody bid. ${spaceLabel(event.position)} stays with the bank.`);
-        else if (game.players[event.winnerId]) log(`${game.players[event.winnerId].name} won ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+        else if (game.players[event.winnerId]) {
+          const winner = game.players[event.winnerId];
+          log(`${winner.name} won ${spaceLabel(event.position)} for ${fmt(event.amount)}.`);
+          showGameCallout({ icon: '🔨', title: 'SOLD!', subtitle: `${winner.name} wins ${spaceLabel(event.position)} for ${fmt(event.amount)}.`, kind: 'gold', duration: 1450 });
+        }
         break;
       case 'DEBT_PAID':
         if (player) log(`${player.name} paid the ${fmt(event.amount)} debt.`);
         break;
       case 'PLAYER_BANKRUPT':
-        if (player) log(`${player.name} went bankrupt.`);
+        if (player) {
+          log(`${player.name} went bankrupt.`);
+          showGameCallout({ icon: '💸', title: 'BANKRUPT!', subtitle: `${player.name} is out of the game.`, kind: 'red', duration: 1600 });
+        }
         break;
       case 'TRADE_PROPOSED':
         if (game.players[event.from] && game.players[event.to]) log(`${game.players[event.from].name} sent a trade to ${game.players[event.to].name}.`);
@@ -4715,13 +4944,17 @@ function presentAuthoritativeActionEvents(events) {
         break;
       case 'TRADE_COMPLETED':
         log('Trade completed.');
+        showGameCallout({ icon: '🤝', title: 'TRADE COMPLETE!', subtitle: 'Deal locked in.', kind: 'blue', duration: 1200 });
         break;
       case 'DOUBLES_AGAIN':
         log('Doubles. Roll again.');
         break;
       case 'TURN_CHANGED': {
         const nextPlayer = game.players[event.playerId];
-        if (nextPlayer) log(`${nextPlayer.name}'s turn.`);
+        if (nextPlayer) {
+          log(`${nextPlayer.name}'s turn.`);
+          showTurnCallout(nextPlayer.id);
+        }
         break;
       }
       case 'ACTION_TIMER_EXPIRED':
