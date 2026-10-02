@@ -146,6 +146,8 @@
     let hudSignature = '';
     let lastFocusKey = null;
     let bindingsDirty = true;
+    let rollPressTurn = null;
+    let hudHeight = 54;
 
     function addStyles() {
       if (doc.getElementById('controllerSupportStyles')) return;
@@ -343,11 +345,17 @@
       return hud;
     }
 
-    function positionTurnPrompt() {
-      const height = Math.ceil(doc.getElementById('controllerHud')?.getBoundingClientRect().height || 0);
-      const value = height + 'px';
-      if (height && doc.body.style.getPropertyValue('--controller-hud-height') !== value) {
-        doc.body.style.setProperty('--controller-hud-height', value);
+    function positionTurnPrompt(entries) {
+      const boxes = entries?.[0]?.borderBoxSize;
+      const measured = Array.isArray(boxes) ? boxes[0]?.blockSize : boxes?.blockSize;
+      const height = Math.ceil(measured || doc.getElementById('controllerHud')?.getBoundingClientRect().height || 0);
+      if (height) hudHeight = height;
+      const prompt = doc.getElementById('controllerTurnPrompt');
+      const value = hudHeight + 'px';
+      // Keep this layout variable on the prompt rather than invalidating the
+      // inherited styles of the entire 3D board whenever the help bar changes.
+      if (prompt && prompt.style.getPropertyValue('--controller-hud-height') !== value) {
+        prompt.style.setProperty('--controller-hud-height', value);
       }
     }
 
@@ -362,8 +370,9 @@
         updateTurnPrompt(false);
         return;
       }
+      const rolling = rollInteraction(interaction);
       const hints = interaction.kind === 'gameplay'
-        ? `<span>Left stick: cursor</span><span><kbd>${labels.A}</kbd> Roll / end turn</span><span><kbd>${labels.RT}</kbd> Click cursor</span><span>Right stick: scroll</span>`
+        ? `<span>Left stick: cursor</span>${rolling.reserved ? `<span><kbd>${labels.A}</kbd> ${rolling.ready ? 'Roll' : 'Rolling…'}</span><span><kbd>${labels.RT}</kbd> Click cursor</span>` : `<span><kbd>${labels.A}</kbd> / <kbd>${labels.RT}</kbd> Click cursor</span>`}<span>Right stick: scroll</span>`
         : interaction.kind === 'keyboard'
         ? `<span>Stick / D-pad: choose key</span><span><kbd>${labels.A}</kbd> Type</span><span><kbd>${labels.X}</kbd> Delete</span><span><kbd>${labels.B}</kbd> Cancel</span><span><kbd>${labels.MENU}</kbd> Done</span>`
         : interaction.kind === 'manage'
@@ -381,7 +390,7 @@
         ${hints}
         ${gameHints}`;
       hud.classList.add('connected');
-      positionTurnPrompt();
+      if (!root.ResizeObserver) positionTurnPrompt();
     }
 
     function updateTurnPrompt(canRoll) {
@@ -390,6 +399,7 @@
       if (!prompt) {
         prompt = doc.createElement('div'); prompt.id = 'controllerTurnPrompt';
         prompt.className = 'controller-turn-prompt'; prompt.setAttribute('role', 'status');
+        prompt.style.setProperty('--controller-hud-height', hudHeight + 'px');
         doc.body.appendChild(prompt);
       }
       const player = doc.getElementById('dock')?.dataset.controllerPlayer || '';
@@ -423,9 +433,17 @@
       return element?.dataset.controllerFocus || element?.id || element?.getAttribute('onclick') || null;
     }
 
+    function rollInteraction(context) {
+      const button = doc.querySelector('#dock [data-controller-action="roll"]');
+      const turn = doc.getElementById('turnLabel')?.textContent;
+      if (!button || !button.disabled || turn !== rollPressTurn) rollPressTurn = null;
+      const ready = context.kind === 'gameplay' && !!button && !button.disabled && !button.hidden;
+      return { button, ready, reserved: context.kind === 'gameplay' && (ready || (!!button && rollPressTurn != null)) };
+    }
+
     function syncInteraction() {
       if (keyboardState && !keyboardState.input.isConnected) closeKeyboard(false);
-      const next = readInteraction();
+      const next = bindingsDirty || !interaction.scope.isConnected ? readInteraction() : interaction;
       const changed = next.kind !== interaction.kind || next.mode !== interaction.mode;
       interaction = next;
       if (doc.body.dataset.controllerMode !== next.mode) doc.body.dataset.controllerMode = next.mode;
@@ -445,11 +463,10 @@
         }
         lastFocusKey = focusKey(doc.activeElement);
       }
-      const roll = doc.querySelector('#dock [data-controller-action="roll"]');
-      const canRoll = next.kind === 'gameplay' && !!roll && !roll.disabled && visible(roll);
-      updateTurnPrompt(canRoll);
-      const signature = [next.kind, next.mode, connectedId, canRoll].join('|');
-      if (signature !== hudSignature) { hudSignature = signature; updateHud(); }
+      const rolling = rollInteraction(next);
+      updateTurnPrompt(rolling.ready);
+      const signature = [next.kind, next.mode, connectedId, rolling.ready, rolling.reserved].join('|');
+      if (signature !== hudSignature) { hudSignature = signature; bindingsDirty = true; updateHud(); }
       if (bindingsDirty && connectedIndex != null) { bindingsDirty = false; refreshBindingLabels(); }
     }
 
@@ -552,7 +569,7 @@
     }
 
     function displayed(el) {
-      if (!el) return false;
+      if (!el || el.hidden || !el.isConnected) return false;
       const style = root.getComputedStyle(el);
       if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
       const rect = el.getBoundingClientRect();
@@ -684,18 +701,20 @@
 
     function controlText(control) {
       if (control.getAttribute('aria-label')) return control.getAttribute('aria-label');
-      const copy = control.cloneNode(true);
-      copy.querySelectorAll('.controller-bind').forEach(badge => badge.remove());
-      return copy.textContent || '';
+      const walker = doc.createTreeWalker(control, root.NodeFilter.SHOW_TEXT);
+      let text = '', node;
+      while ((node = walker.nextNode())) {
+        if (!node.parentElement?.closest('.controller-bind')) text += node.nodeValue;
+      }
+      return text;
     }
 
     function buttonByText(patterns, scope = doc, includeDisabled = false) {
       const lowered = patterns.map(value => String(value).toLowerCase());
       return Array.from(scope.querySelectorAll('button, [role="button"], summary'))
-        .filter(includeDisabled ? displayed : visible)
         .find(button => {
           const text = controlText(button).trim().toLowerCase();
-          return lowered.some(pattern => text === pattern || text.startsWith(pattern));
+          return lowered.some(pattern => text === pattern || text.startsWith(pattern)) && (includeDisabled ? displayed(button) : visible(button));
         }) || null;
     }
 
@@ -711,9 +730,10 @@
         add('MENU', doc.querySelector('.corner-tr button[onclick="openGameMenu()"]'));
       }
       if (context.kind === 'gameplay') {
-        add('A', doc.querySelector('#dock .primary'));
+        const rolling = rollInteraction(context);
+        if (rolling.reserved) add('A', rolling.button);
         add('X', doc.querySelector('#dock button[onclick="openManage()"]'));
-        add('Y', text(['trade']));
+        add('Y', doc.querySelector('#dock button[onclick="act(\'openTrade\')"]'));
         add('LB', doc.querySelector('#dock button[onclick="openDeeds()"]'));
         add('LT', doc.querySelector('#dock .action .dbtn'));
       } else if (context.kind === 'manage') {
@@ -773,6 +793,7 @@
 
     function refreshBindingLabels() {
       const context = readInteraction();
+      const rolling = rollInteraction(context);
       const targets = shortcutTargets(context);
       const activeTargets = new Set(targets.values());
       const assigned = new Map(Array.from(targets, ([key, element]) => [element, key]));
@@ -780,11 +801,13 @@
       assigned.set(doc.getElementById('cornerProfileButton'), 'VIEW');
       const gameMenu = doc.querySelector('.corner-tr button[onclick="openGameMenu()"]');
       if (gameMenu) assigned.set(gameMenu, 'MENU');
-      const controls = doc.querySelectorAll('button, a[href], summary, input:not([type="hidden"]):not([type="file"]), select, textarea');
+      // Read visibility before inserting badges. Interleaving these reads with
+      // DOM writes forced the browser to lay out the board again for every label.
+      const controls = Array.from(doc.querySelectorAll('button, a[href], summary, input:not([type="hidden"]):not([type="file"]), select, textarea'))
+        .filter(control => !control.matches('.cell, .controller-key:not(.wide):not(.extra-wide)') && !control.closest('#controllerHud, #controllerTurnPrompt, .vol-ctrl'))
+        .filter(displayed);
       for (const control of controls) {
-        if (control.matches('.cell, .controller-key:not(.wide):not(.extra-wide)') || control.closest('#controllerHud, #controllerTurnPrompt, .vol-ctrl')) continue;
-        if (!displayed(control)) continue;
-        const key = assigned.get(control) || (context.kind === 'gameplay' ? 'RT' : 'A');
+        const key = assigned.get(control) || (context.kind === 'gameplay' ? rolling.reserved ? 'RT' : 'SELECT' : 'A');
         let host = control;
         const field = control.matches('input, select, textarea');
         if (field) {
@@ -807,7 +830,8 @@
           if (host) host.appendChild(badge); else control.after(badge);
         }
         if (badge.dataset.key !== key) badge.dataset.key = key;
-        if (badge.textContent !== labels[key]) badge.textContent = labels[key];
+        const label = key === 'SELECT' ? `${labels.A} / ${labels.RT}` : labels[key];
+        if (badge.textContent !== label) badge.textContent = label;
         const inactive = context.scope !== doc && !context.scope.contains(control) && !activeTargets.has(control);
         if (badge.hidden !== inactive) badge.hidden = inactive;
       }
@@ -817,7 +841,7 @@
       if (connectedIndex == null || bindingsDirty) return;
       bindingsDirty = records.some(record => {
         const element = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-        if (element?.closest('.controller-bind, #controllerHud, #controllerTurnPrompt, #controllerCursor, #board')) return false;
+        if (element?.closest('.controller-bind, .controller-toast, #controllerHud, #controllerTurnPrompt, #controllerCursor, #board, #tokens, #hudPills, #caption, #turnLabel')) return false;
         if (record.type === 'childList') {
           const nodes = [...record.addedNodes, ...record.removedNodes];
           if (nodes.length && nodes.every(node => node.nodeType === 1 && node.classList?.contains('controller-bind'))) return false;
@@ -1306,6 +1330,10 @@
     root.addEventListener('gamepaddisconnected', onGamepadDisconnected);
     root.addEventListener('resize', () => { bindingsDirty = true; positionTurnPrompt(); });
     doc.addEventListener('pointerdown', onPointerInput, { passive: true });
+    doc.addEventListener('click', event => {
+      const roll = event.target.closest?.('#dock [data-controller-action="roll"]');
+      if (roll && !roll.disabled) rollPressTurn = doc.getElementById('turnLabel')?.textContent || null;
+    }, true);
     doc.addEventListener('keydown', onKeyboardInput, { passive: true });
 
     const pads = getPads();
