@@ -1024,6 +1024,10 @@ input:focus-visible {
 }
 .dialog.wide { max-width: 860px; }
 .dialog.plain { background: transparent; border: 0; color: #fff; text-align: center; }
+.app-system-dialog { z-index: 535; }
+.app-system-dialog .dialog { max-width: 520px; }
+.app-system-dialog .app-dialog-message { margin: 0 0 14px; line-height: 1.45; }
+.app-system-dialog input { width: 100%; margin: 0 0 12px; }
 /* --- THE COLOR-GLITCH FIX ---
    Deed-related dialogs (buy / auction / peek / deeds) used to inherit
    the plain var(--panel)/var(--fg) theme colors, which flip to a
@@ -3271,9 +3275,102 @@ function updateSaveGameBtn() {
   if (!game || game.over || !backendIsHostOfCurrentGame()) { el.innerHTML = ''; return; }
   el.innerHTML = `<button class="btn alt" ${saveGameInFlight ? 'disabled' : ''} onclick="openSaveGameDialog()">${saveGameInFlight ? 'Saving &amp; quitting...' : 'Save &amp; Quit'}</button>`;
 }
-function openSaveGameDialog() {
+function appDialog({ title = 'Monopoly', message = '', value = null, maxLength = 80, confirmLabel = 'OK', cancelLabel = null } = {}) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'scrim app-system-dialog';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+
+    const dialog = document.createElement('div');
+    dialog.className = 'dialog';
+    const heading = document.createElement('h2');
+    heading.textContent = title;
+    const body = document.createElement('p');
+    body.className = 'app-dialog-message';
+    body.textContent = message;
+    dialog.append(heading, body);
+
+    let input = null;
+    if (value !== null) {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = maxLength;
+      input.value = String(value);
+      input.autocomplete = 'off';
+      dialog.appendChild(input);
+    }
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      overlay.remove();
+      resolve(result);
+    };
+
+    if (cancelLabel) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'btn alt';
+      cancel.textContent = cancelLabel;
+      cancel.addEventListener('click', () => finish(null));
+      row.appendChild(cancel);
+    }
+
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.className = 'btn';
+    confirm.textContent = confirmLabel;
+    confirm.addEventListener('click', () => finish(input ? input.value : true));
+    row.appendChild(confirm);
+    dialog.appendChild(row);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay && cancelLabel) finish(null);
+    });
+    overlay.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && cancelLabel) {
+        event.preventDefault();
+        finish(null);
+      } else if (event.key === 'Enter' && input && document.activeElement === input) {
+        event.preventDefault();
+        finish(input.value);
+      }
+    });
+
+    setTimeout(() => {
+      const target = input || confirm;
+      target.focus();
+      if (input) input.select();
+    }, 0);
+  });
+}
+
+async function appConfirm(message, title = 'Confirm', confirmLabel = 'Confirm') {
+  return (await appDialog({ title, message, confirmLabel, cancelLabel: 'Cancel' })) === true;
+}
+
+async function appPrompt(message, value = '', title = 'Rename', maxLength = 80) {
+  return appDialog({ title, message, value, maxLength, confirmLabel: 'Save', cancelLabel: 'Cancel' });
+}
+
+async function appAlert(message, title = 'Monopoly') {
+  await appDialog({ title, message, confirmLabel: 'OK' });
+}
+
+async function openSaveGameDialog() {
   if (saveGameInFlight) return;
-  if (!window.confirm('Save this match and return everyone to the menu? The original players must all return before it can continue.')) return;
+  const confirmed = await appConfirm(
+    'Save this match and return everyone to the menu? The original players must all return before it can continue.',
+    'Save & Quit?',
+    'Save & Quit'
+  );
+  if (!confirmed) return;
   backendSaveAndQuitGame(window.authoritativeGame.gameId);
 }
 async function backendSaveAndQuitGame(gameId) {
@@ -3291,7 +3388,7 @@ async function backendSaveAndQuitGame(gameId) {
     await handleServerGamePaused(gameId, true);
   } catch (error) {
     setAccountStatus(`Save & Quit failed: ${error.message}`);
-    window.alert(`Save & Quit failed. You are still in the match.\n\n${error.message}`);
+    await appAlert(`Save & Quit failed. You are still in the match.\n\n${error.message}`, 'Save & Quit failed');
   } finally {
     saveGameInFlight = false;
     updateSaveGameBtn();
@@ -5205,7 +5302,7 @@ async function backendRejoinPausedGame(gameId) {
 
 async function backendRenameGame(gameId, currentName) {
   if (!gameId) return;
-  const nextName = window.prompt('Server game name:', currentName || 'Server game');
+  const nextName = await appPrompt('Server game name:', currentName || 'Server game', 'Rename server game', 80);
   if (nextName == null) return;
   const name = nextName.trim();
   if (!name || name.length > 80) {
@@ -5228,7 +5325,13 @@ async function backendRenameGame(gameId, currentName) {
 }
 
 async function backendDeleteGame(gameId) {
-  if (!gameId || !window.confirm('Delete this server game and its stored multiplayer records? This cannot be undone.')) return;
+  if (!gameId) return;
+  const confirmed = await appConfirm(
+    'Delete this server game and its stored multiplayer records? This cannot be undone.',
+    'Delete server game?',
+    'Delete'
+  );
+  if (!confirmed) return;
   try {
     await backendGameRequest('/api/game/delete', {
       method: 'POST',
