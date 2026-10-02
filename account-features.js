@@ -385,35 +385,75 @@ function editorSpaceLabel(index) {
   return boardsScreenState.editor?.property_names?.[index] || SPACES[index].name;
 }
 
+let boardEditorResizeObserver;
+function fitBoardEditorLabels() {
+  const preview = document.querySelector('.board-editor-preview');
+  if (!preview) return;
+  preview.querySelectorAll('.board-preview-space').forEach(square => {
+    const label = square.querySelector('.board-preview-label');
+    if (!label) return;
+    const style = getComputedStyle(square);
+    const width = square.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const height = square.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    // Fit each tile independently. Wrap at spaces and keep whole words intact.
+    let size = Math.min(13, Math.max(6, preview.clientWidth / 64));
+    label.style.fontSize = `${size}px`;
+    while (size > 1 && (label.scrollWidth > width || label.scrollHeight > height)) {
+      size = Math.max(1, size - .25);
+      label.style.fontSize = `${size}px`;
+    }
+  });
+}
+
 function renderBoardEditorScreen() {
+  if (boardEditorResizeObserver) boardEditorResizeObserver.disconnect();
   const editor = boardsScreenState.editor;
   if (!editor) { setup.screen = 'boards'; renderBoardsScreen(); return; }
   const spaces = SPACES.map((space, index) => {
     const [row, col] = gridPos(index);
     const editable = CUSTOM_PROPERTY_IDS.has(index);
     const color = space.type === 'property' ? COLOR_GROUPS[space.group].css : '#a9b3ac';
-    const contents = esc(editorSpaceLabel(index));
+    const label = esc(editorSpaceLabel(index));
+    const contents = `<span class="board-preview-label">${label}</span>`;
     const style = `grid-row:${row};grid-column:${col};--space-color:${color}`;
     return editable
-      ? `<button class="board-preview-space property ${editor.selected === index ? 'selected' : ''}" style="${style}" type="button" data-space="${index}" onclick="selectEditorProperty(${index})">${contents}</button>`
-      : `<div class="board-preview-space ${space.type}" style="${style}">${contents}</div>`;
+      ? `<button class="board-preview-space property ${editor.selected === index ? 'selected' : ''}" style="${style}" type="button" title="${label}" aria-label="Rename ${label}" aria-pressed="${editor.selected === index}" data-space="${index}" onclick="selectEditorProperty(${index})">${contents}</button>`
+      : `<div class="board-preview-space ${space.type}" style="${style}" title="${label}">${contents}</div>`;
   }).join('');
   const selectedName = editor.property_names[editor.selected] || SPACES[editor.selected].name;
-  $('app').innerHTML = `<div class="setup">
+  const selectedColor = COLOR_GROUPS[SPACES[editor.selected].group].css;
+  $('app').innerHTML = `<div class="setup board-editor">
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div>
     <p class="sub">Board Editor</p>
+    <div class="board-editor-layout">
+    <div class="panel acc-green board-editor-stage">
+      <div class="board-editor-stage-heading"><h2>Your board</h2><span class="board-editor-count">${Object.keys(editor.property_names).length} of ${CUSTOM_PROPERTY_IDS.size} properties renamed</span></div>
+      <div class="board-editor-preview"><div class="board-preview-center"><span class="board-preview-title">${esc(editor.name)}</span><span class="board-preview-hint">Select a colored property to rename it</span></div>${spaces}</div>
+    </div>
     <div class="panel acc-blue board-editor-controls">
+      <h2>Customize your board</h2>
+      <div class="board-editor-field">
       <label class="muted" for="customBoardName">Board name</label>
       <input id="customBoardName" type="text" maxlength="40" value="${esc(editor.name)}" oninput="updateBoardEditorName(this.value)">
-      <div class="board-editor-preview"><div class="board-preview-center">${esc(editor.name)}<br><span class="muted">Select a colored property to rename it</span></div>${spaces}</div>
-      <label class="muted" for="selectedPropertyName">Selected property: ${esc(SPACES[editor.selected].name)}</label>
+      </div>
+      <div class="board-editor-field board-editor-property" style="--space-color:${selectedColor}">
+      <label for="selectedPropertyName">${esc(SPACES[editor.selected].name)}</label>
+      <p class="muted">Enter a new property name</p>
       <input id="selectedPropertyName" type="text" maxlength="32" value="${esc(selectedName)}" oninput="updateBoardPropertyName(this.value)">
-      <p class="muted">GO, Jail, Free Parking, and Go To Jail remain unchanged.</p>
+      </div>
+      <p class="muted">Choose a colored tile on the board to edit its name. Clear the field to restore its original name.</p>
       <div class="account-actions"><button class="btn" type="button" onclick="saveCustomBoardEditor()">Save board</button>
         <button class="btn alt" type="button" onclick="setup.screen='boards'; renderBoardsScreen()">Cancel</button></div>
       <p class="account-status" role="status">${esc(boardsScreenState.status)}</p>
     </div>
+    </div>
   </div>`;
+  fitBoardEditorLabels();
+  if (typeof ResizeObserver !== 'undefined') {
+    boardEditorResizeObserver = new ResizeObserver(fitBoardEditorLabels);
+    boardEditorResizeObserver.observe(document.querySelector('.board-editor-preview'));
+  }
+  if (document.fonts) document.fonts.ready.then(fitBoardEditorLabels);
 }
 
 function selectEditorProperty(index) {
@@ -425,8 +465,8 @@ function selectEditorProperty(index) {
 function updateBoardEditorName(value) {
   if (!boardsScreenState.editor) return;
   boardsScreenState.editor.name = value;
-  const title = document.querySelector('.board-preview-center');
-  if (title) title.firstChild.textContent = value;
+  const title = document.querySelector('.board-preview-title');
+  if (title) title.textContent = value;
 }
 
 function updateBoardPropertyName(value) {
@@ -436,7 +476,15 @@ function updateBoardPropertyName(value) {
   if (value.trim()) editor.property_names[index] = value.trim();
   else delete editor.property_names[index];
   const square = document.querySelector(`[data-space="${index}"]`);
-  if (square) square.textContent = value || SPACES[index].name;
+  if (square) {
+    const name = editorSpaceLabel(index);
+    square.querySelector('.board-preview-label').textContent = name;
+    square.title = name;
+    square.setAttribute('aria-label', `Rename ${name}`);
+    fitBoardEditorLabels();
+  }
+  const count = document.querySelector('.board-editor-count');
+  if (count) count.textContent = `${Object.keys(editor.property_names).length} of ${CUSTOM_PROPERTY_IDS.size} properties renamed`;
 }
 
 async function saveCustomBoardEditor() {
