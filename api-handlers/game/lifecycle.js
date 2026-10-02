@@ -353,6 +353,19 @@ async function startGame({ account, gameId, db = database() }) {
       VALUES (${normalizedGameId}, ${account.id}, ${serialized}::jsonb, ${JSON.stringify(board)}::jsonb, ${1})
       ON CONFLICT (id) DO UPDATE SET owner_id = EXCLUDED.owner_id, state = EXCLUDED.state, board = EXCLUDED.board, version = EXCLUDED.version, updated_at = now()`;
 
+    // Create the save slot only when the match itself starts. Opening the
+    // Create Game screen or making a waiting lobby does not create a save.
+    const saveId = randomUUID();
+    const savePlayers = players.map(player => ({
+      accountId: player.account_id,
+      seatIndex: Number(player.seat_index),
+      username: player.username,
+      avatarUrl: null,
+    }));
+    await tx`INSERT INTO game_saves (id, owner_id, source_game_id, name, status, version, state, board, players, selected_board_id)
+      VALUES (${saveId}, ${account.id}, ${normalizedGameId}, ${game.name || 'Server game'}, ${'SAVED'}, ${1},
+        ${JSON.stringify(serialized)}::jsonb, ${JSON.stringify(board)}::jsonb, ${JSON.stringify(savePlayers)}::jsonb, ${game.selected_board_id || null})`;
+
     await tx`UPDATE games SET status = ${'ACTIVE'}, started_at = now(), updated_at = now() WHERE id = ${normalizedGameId}`;
 
     const updated = await tx`SELECT * FROM games WHERE id = ${normalizedGameId}`;
@@ -362,6 +375,7 @@ async function startGame({ account, gameId, db = database() }) {
       game: serializeGameRow(updated[0]),
       status: 'ACTIVE',
       version: 1,
+      saveId,
       state,
       events: orderResult.events,
       players: players.map(player => ({
@@ -402,6 +416,15 @@ async function pauseGame({ account, gameId, expectedVersion, db = database() }) 
         state.players.some((player, seatIndex) => player.accountId !== memberships[seatIndex].account_id || player.id !== Number(memberships[seatIndex].seat_index))) {
       return err('PLAYER_ROSTER_MISMATCH', 'The authoritative state does not match the original player seats.', 409);
     }
+
+    // Save & Quit refreshes the save slot once, at pause time. Avoiding an
+    // extra save-table write on every action keeps gameplay latency low.
+    await tx`UPDATE game_saves
+      SET status = ${'SAVED'}, version = ${version},
+          state = ${JSON.stringify(engine.serializeState(state))}::jsonb,
+          board = ${JSON.stringify(stateRow.board || {})}::jsonb,
+          updated_at = now()
+      WHERE source_game_id = ${normalizedGameId} AND owner_id = ${account.id}`;
 
     await tx`UPDATE game_players SET returned_at = NULL WHERE game_id = ${normalizedGameId}`;
     await tx`UPDATE games SET status = ${'PAUSED'}, paused_at = now(), updated_at = now()
