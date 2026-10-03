@@ -196,7 +196,7 @@ function openGameMenu() {
   overlay.dataset.controllerContext = 'game-menu';
   overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-labelledby', 'gameMenuTitle');
-  overlay.innerHTML = `<section class="dialog game-menu-card"><h2 id="gameMenuTitle">Game Menu</h2><div class="game-menu-actions">
+  overlay.innerHTML = `<section class="dialog game-menu-card"><h2 id="gameMenuTitle">Game Menu</h2><p class="muted">${esc(houseRulesSummary(game?.houseRules))}</p><div class="game-menu-actions">
     <button class="btn" onclick="closeGameMenu()">▶ Resume</button>
     <button class="btn alt" onclick="showGamePlayers()">♟ Players</button>
     <button class="btn alt" onclick="closeGameMenu();openFriendsScreen()">♧ Friends</button>

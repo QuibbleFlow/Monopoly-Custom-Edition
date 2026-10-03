@@ -15,6 +15,7 @@ module.exports = async function startGameRoute(req, res) {
   const result = await startGame({
     account,
     gameId: body.gameId || body.game_id || null,
+    houseRules: body.houseRules,
     db: database(),
   });
 

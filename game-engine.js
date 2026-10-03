@@ -1,8 +1,9 @@
 (function (root, factory) {
-  const engine = factory(typeof module !== 'undefined' && module.exports ? require('./game-cards.js') : root.MonopolyCards);
+  const commonJS = typeof module !== 'undefined' && module.exports;
+  const engine = factory(commonJS ? require('./game-cards.js') : root.MonopolyCards, commonJS ? require('./house-rules.js') : root.MonopolyHouseRules, commonJS ? require('./game-board.js') : root.MonopolyBoard);
   if (typeof module !== 'undefined' && module.exports) module.exports = engine;
   if (root) root.MonopolyGameEngine = engine;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (cards) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (cards, houseRules, board) {
   'use strict';
 
   const DEFAULT_COLORS = ['#d62839', '#1f6fd1', '#16803a', '#8e4bd0',
@@ -19,17 +20,22 @@
     if (!Array.isArray(names) || names.length < 2 || names.length > 8) {
       throw new Error('A game requires between two and eight players.');
     }
+    const matchRules = houseRules.normalize(options.houseRules);
+    const factor = matchRules.moneyMultiplier;
     return {
+      houseRules: matchRules,
+      freeParkingPot: 0,
+      ...(factor !== 1 ? { matchSpaces: houseRules.scaleSpaces(options.spaces || board.spaces, matchRules) } : {}),
       boardNames: { ...boardNames },
       cardDecks: cards.normalizeDecks(options.cardDecks),
-      rules: {},
+      rules: factor === 1 ? {} : { goSalary: 200 * factor, jailFine: 50 * factor },
       players: names.map((name, id) => ({
         id,
         name,
         accountId: accountIds[id] == null ? null : accountIds[id],
         avatarUrl: avatarUrls[id] || null,
         color: colors[id] || DEFAULT_COLORS[id],
-        money: startMoney,
+        money: startMoney * factor,
         pos: 0,
         inJail: false,
         jailTurns: 0,
@@ -99,18 +105,22 @@
   }
 
   function ownsFullSet(state, spaces, playerId, group) {
+    spaces = state.matchSpaces || spaces;
     return groupSquares(spaces, group).every(index => state.owners[index] === playerId);
   }
 
   function groupHasHouses(state, spaces, group) {
+    spaces = state.matchSpaces || spaces;
     return groupSquares(spaces, group).some(index => state.houses[index] > 0);
   }
 
   function groupHasMortgage(state, spaces, group) {
+    spaces = state.matchSpaces || spaces;
     return groupSquares(spaces, group).some(index => state.mortgaged[index]);
   }
 
   function countOwned(state, spaces, playerId, type) {
+    spaces = state.matchSpaces || spaces;
     return spaces.reduce((count, space, index) => count + (space.type === type && state.owners[index] === playerId ? 1 : 0), 0);
   }
 
@@ -122,10 +132,12 @@
   }
 
   function calcRent(state, spaces, position) {
+    spaces = state.matchSpaces || spaces;
     return Math.round(baseRent(state, spaces, position) * (state.rules?.rentMultiplier ?? 1));
   }
 
   function baseRent(state, spaces, position) {
+    spaces = state.matchSpaces || spaces;
     const space = spaces[position];
     const ownerId = state.owners[position];
     if (!space || ownerId == null) return 0;
@@ -134,10 +146,10 @@
       if (houses > 0) return space.rents[houses];
       return ownsFullSet(state, spaces, ownerId, space.group) ? space.rents[0] * 2 : space.rents[0];
     }
-    if (space.type === 'railroad') return 25 * Math.pow(2, countOwned(state, spaces, ownerId, 'railroad') - 1);
+    if (space.type === 'railroad') return 25 * (state.houseRules?.moneyMultiplier || 1) * Math.pow(2, countOwned(state, spaces, ownerId, 'railroad') - 1);
     if (space.type === 'utility') {
       const multiplier = countOwned(state, spaces, ownerId, 'utility') === 2 ? 10 : 4;
-      return multiplier * (state.dice[0] + state.dice[1]);
+      return multiplier * (state.houseRules?.moneyMultiplier || 1) * (state.dice[0] + state.dice[1]);
     }
     return 0;
   }
@@ -151,6 +163,7 @@
   // which is a private, in-turn "how much can this player raise right
   // now" helper used only during forced asset sales.
   function calculateNetWorth(state, spaces, playerId) {
+    spaces = state.matchSpaces || spaces;
     const p = state.players[playerId];
     if (!p) return 0;
     let worth = p.money;
@@ -171,6 +184,7 @@
   // have already had their assets transferred away and money zeroed by
   // declareBankruptcy, so they correctly show 0/0.
   function computeFinalResults(state, spaces) {
+    spaces = state.matchSpaces || spaces;
     if (!state.over) return null;
     const eliminated = Array.isArray(state.eliminatedOrder) ? state.eliminatedOrder.slice().reverse() : [];
     const ranked = state.winnerId == null ? eliminated : [state.winnerId, ...eliminated.filter(id => id !== state.winnerId)];
@@ -195,6 +209,7 @@
   }
 
   function canBuild(state, spaces, position, playerId) {
+    spaces = state.matchSpaces || spaces;
     const space = spaces[position];
     if (!space || space.type !== 'property' || state.owners[position] !== playerId) return false;
     if (!ownsFullSet(state, spaces, playerId, space.group) || groupHasMortgage(state, spaces, space.group)) return false;
@@ -202,6 +217,7 @@
   }
 
   function canSell(state, spaces, position, playerId) {
+    spaces = state.matchSpaces || spaces;
     const space = spaces[position];
     return !!space && space.type === 'property' && state.owners[position] === playerId && state.houses[position] > 0;
   }
@@ -215,18 +231,21 @@
   }
 
   function canMortgage(state, spaces, position, playerId) {
+    spaces = state.matchSpaces || spaces;
     const space = spaces[position];
     if (!space || !space.price || state.owners[position] !== playerId || state.mortgaged[position]) return false;
     return space.type !== 'property' || !groupHasHouses(state, spaces, space.group);
   }
 
   function isTradable(state, spaces, position, playerId) {
+    spaces = state.matchSpaces || spaces;
     const space = spaces[position];
     return !!space && state.owners[position] === playerId &&
       !(space.type === 'property' && groupHasHouses(state, spaces, space.group));
   }
 
   function validateTrade(state, trade, spaces, interest = 0.1) {
+    spaces = state.matchSpaces || spaces;
     if (!trade || !state.players[trade.from] || !state.players[trade.to]) return { code: 'PLAYERS_REQUIRED' };
     if (trade.from === trade.to) return { code: 'PLAYERS_REQUIRED' };
     const from = state.players[trade.from], to = state.players[trade.to];
@@ -252,6 +271,7 @@
   }
 
   function legalActions(state, spaces, options = {}) {
+    spaces = state.matchSpaces || spaces;
     const player = currentPlayer(state);
     const actions = [];
     if (!player || player.bankrupt || state.over || state.paused || !state.started) return actions;
@@ -305,7 +325,7 @@
 
   function applyAction(inputState, action, options = {}) {
     const state = cloneState(inputState);
-    const spaces = options.spaces || [];
+    const spaces = state.matchSpaces || options.spaces || [];
     const jailFine = state.rules?.jailFine ?? options.jailFine ?? 50;
     const jailPosition = options.jailPosition == null ? 10 : options.jailPosition;
     const goSalary = state.rules?.goSalary ?? options.goSalary ?? 200;
@@ -387,6 +407,12 @@
       return value;
     }
 
+    function addParkingFee(amount) {
+      if (!state.houseRules?.freeParkingJackpot || amount <= 0) return;
+      state.freeParkingPot = (state.freeParkingPot || 0) + amount;
+      emit('FREE_PARKING_FUNDED', { amount, total: state.freeParkingPot });
+    }
+
     function declareBankruptcy(playerId, creditorId) {
       const debtor = player(playerId);
       const creditor = creditorId == null ? null : player(creditorId);
@@ -398,6 +424,7 @@
         emit('BANKRUPTCY_PROPERTY_TRANSFERRED', { playerId, creditorId: creditor ? creditor.id : null, position: index });
       }
       if (creditor) creditor.money += Math.max(0, debtor.money);
+      else addParkingFee(Math.max(0, debtor.money));
       debtor.money = 0;
       debtor.bankrupt = true;
       state.eliminatedOrder.push(debtor.id);
@@ -416,6 +443,7 @@
       if (debtor.money >= amount) {
         debtor.money -= amount;
         if (creditor) creditor.money += amount;
+        else addParkingFee(amount);
         emit('PAYMENT_SETTLED', { playerId, creditorId: creditor ? creditor.id : null, amount });
         return true;
       }
@@ -444,6 +472,7 @@
         if (debtor.money >= amount) {
           debtor.money -= amount;
           if (creditor) creditor.money += amount;
+          else addParkingFee(amount);
           emit('PAYMENT_SETTLED', { playerId, creditorId: creditor ? creditor.id : null, amount });
           return true;
         } else {
@@ -583,6 +612,14 @@
           const amount = Math.round(space.amount * (state.rules?.taxMultiplier ?? 1));
           emit('TAX_DUE', { playerId: active.id, position: landingPosition, amount });
           payMoney(active.id, amount, null, false);
+        } else if (space.type === 'parking' && state.houseRules?.freeParkingJackpot) {
+          const amount = state.freeParkingPot || 0;
+          active.money += amount;
+          state.freeParkingPot = 0;
+          emit('FREE_PARKING_COLLECTED', { playerId: active.id, position: landingPosition, amount });
+        } else if (space.type === 'go' && state.houseRules?.doubleGo) {
+          active.money += goSalary;
+          emit('GO_LANDING_BONUS', { playerId: active.id, position: landingPosition, amount: goSalary });
         } else if (space.type === 'gotojail') {
           emit('LANDING_GO_TO_JAIL', { playerId: active.id, position: landingPosition, jailPosition });
         } else if (space.type === 'chance' || space.type === 'chest') {
@@ -594,10 +631,10 @@
       }
       case 'APPLY_CARD': {
         let card;
-        try { card = cards.normalizeCard(action.card, false); } catch (error) { return fail(error.message); }
+        try { card = houseRules.scaleCard(cards.normalizeCard(action.card, false), state.houseRules, goSalary); } catch (error) { return fail(error.message); }
         const active = player(actorId);
         if (!checkCurrent(actorId) || state.phase !== 'roll' || state.pendingMove || state.landingPending || !card || typeof card.action !== 'string') return fail('That card effect is invalid.');
-        emit('CARD_DRAWN', { playerId: active.id, action: card.action, value: card.value == null ? null : card.value });
+        emit('CARD_DRAWN', { playerId: active.id, action: card.action, value: card.value == null ? null : card.value, text: card.text });
         if (card.action === 'money' || card.action === 'moneyPercentage') {
           if (card.action === 'moneyPercentage') card.value = Math.round(active.money * card.value / 100);
           if (card.value >= 0) {
@@ -665,6 +702,7 @@
         const creditor = debt.creditorId == null ? null : player(debt.creditorId);
         debtor.money -= debt.amount;
         if (creditor) creditor.money += debt.amount;
+        else addParkingFee(debt.amount);
         emit('DEBT_PAID', { playerId: debtor.id, creditorId: creditor ? creditor.id : null, amount: debt.amount });
         finishAction();
         break;
@@ -715,11 +753,11 @@
         };
         for (const position of completed.give) {
           state.owners[position] = to.id;
-          if (state.mortgaged[position]) to.money -= Math.ceil(mortgageValue(spaces, position) * interest);
+          if (state.mortgaged[position]) { const fee = Math.ceil(mortgageValue(spaces, position) * interest); to.money -= fee; addParkingFee(fee); }
         }
         for (const position of completed.get) {
           state.owners[position] = from.id;
-          if (state.mortgaged[position]) from.money -= Math.ceil(mortgageValue(spaces, position) * interest);
+          if (state.mortgaged[position]) { const fee = Math.ceil(mortgageValue(spaces, position) * interest); from.money -= fee; addParkingFee(fee); }
         }
         from.money += completed.getCash - completed.giveCash;
         to.money += completed.giveCash - completed.getCash;
@@ -835,6 +873,7 @@
           if (state.owners[position] !== actorId || !state.mortgaged[position] || active.money < cost) return fail('That property cannot be unmortgaged now.');
           state.mortgaged[position] = false;
           active.money -= cost;
+          addParkingFee(cost - mortgageValue(spaces, position));
           emit('PROPERTY_UNMORTGAGED', { playerId: actorId, position, amount: cost });
         }
         break;
@@ -842,6 +881,7 @@
       case 'PAY_JAIL_FINE': {
         if (!checkCurrent(actorId) || state.phase !== 'roll' || !current().inJail || current().money < jailFine) return fail('The jail fine cannot be paid now.');
         current().money -= jailFine;
+        addParkingFee(jailFine);
         current().inJail = false;
         current().jailTurns = 0;
         emit('JAIL_FINE_PAID', { playerId: actorId, amount: jailFine });

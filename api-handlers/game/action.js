@@ -109,7 +109,7 @@ function resolveRollSequence(initialState, initialEvents, playerId, spaces, rand
     const drawnEvent = events.slice(cardEventStart).find(event => event.type === 'CARD_DRAWN');
     if (drawnEvent) {
       drawnEvent.deck = cardRequest.deck;
-      drawnEvent.text = card.text;
+      // The engine supplies match-scaled text alongside the applied amount.
     }
   }
 

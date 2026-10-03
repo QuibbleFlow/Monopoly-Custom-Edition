@@ -1344,6 +1344,19 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
 .player-avatar-image{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}.player-avatar-image[hidden]{display:none}.avatar,.tk-dot{overflow:hidden}.pill .avatar{flex-shrink:0}
 
 .match-menu-tabs{margin-bottom:20px}.match-menu-options{margin-top:18px}.match-menu-options summary{cursor:pointer;font-weight:700;margin-bottom:12px}.match-menu-row{gap:16px}.match-menu-row .social-name{min-width:0;overflow-wrap:anywhere}.match-menu-row p{margin:5px 0 0;font-weight:400}.match-menu-row>.btn{flex-shrink:0}
+.house-rules { margin-top: 14px; text-align: left; }
+.house-rules summary { cursor: pointer; font-weight: 800; line-height: 1.4; }
+.house-toggle { display: flex; align-items: flex-start; gap: 12px; margin: 18px 0; }
+.house-toggle input[type="checkbox"] { width: 22px; height: 22px; flex: 0 0 22px; margin: 2px 0 0; accent-color: var(--accent); }
+.house-toggle strong, .house-toggle small { display: block; }
+.house-toggle small { font-size: .85rem; line-height: 1.5; margin-top: 5px; }
+.house-money-stepper { display: grid; grid-template-columns: 48px minmax(0, 1fr) 48px; gap: 8px; margin: 8px 0 12px; }
+.house-money-stepper input { width: 100%; min-width: 0; text-align: center; margin: 0; padding: 10px; border: 2px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--fg); font: inherit; }
+.house-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.house-presets .btn { flex: 1 1 90px; }
+.house-money-preview { padding: 12px; border: 1px solid currentColor; border-radius: 8px; line-height: 1.6; font-weight: 700; }
+.parking-jackpot { position: absolute; left: 60%; bottom: 5%; transform: translateX(-50%); width: 65%; text-align: center; line-height: 1.3; padding: .8cqw 1.2cqw; border: 2px solid #172d21; border-radius: 10px; background: #fff3b1; color: #172d21; font-size: clamp(12px, 1.7cqw, 32px); font-weight: 900; }
+.parking-jackpot[hidden] { display: none; }
 </style>
 <link rel="stylesheet" href="multiplayer-ui.css">
 </head>
@@ -1358,6 +1371,7 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
 
 <script src="game-board.js"></script>
 <script src="game-cards.js"></script>
+<script src="house-rules.js"></script>
 <script src="game-engine.js"></script>
 <script src="authoritative-game.js"></script>
 <script src="account-features.js"></script>
@@ -1412,7 +1426,7 @@ const COLOR_GROUPS = window.MonopolyBoard.colorGroups;
      rents     6 rents: [no houses, 1 house, 2, 3, 4 houses, hotel]
    With no houses, a full color set doubles the base rent.
    Mortgage value is always half the price. */
-const SPACES = window.MonopolyBoard.spaces;
+let SPACES = window.MonopolyBoard.spaces;
 const BOARD_SIZE = SPACES.length; // 40
 
 /* =====================================================================
@@ -1694,7 +1708,7 @@ function newGame(names, colors, boardNames = {}, accountIds = [], cardDecks, ava
   // though who goes first is random.
   game = MonopolyGameEngine.createState({
     names, colors: colors || PLAYER_COLORS, accountIds, avatarUrls, boardNames, cardDecks,
-    boardSize: BOARD_SIZE, startMoney: START_MONEY,
+    boardSize: BOARD_SIZE, startMoney: START_MONEY, houseRules: matchHouseRules,
   });
 }
 
@@ -1710,6 +1724,7 @@ function applyGameAction(action) {
 
 // Called after newGame() or after loading a save: builds the screen.
 function attachGame() {
+  SPACES = game.matchSpaces || window.MonopolyBoard.spaces;
   busy = false; popup = null; modalKey = '';
   ui.manage = null; ui.deeds = null; ui.peek = null; ui.intro = null; ui.notice = ''; ui.viewingTrade = false; ui.reviewingTrade = false;
   prevMoney = {}; prevOwners = null; prevHouses = null;
@@ -2653,8 +2668,9 @@ async function land(p) {
 
 async function drawCard(p, deck, label) {
   const card = deck[Math.floor(await rnd() * deck.length)];
-  log(`${label}: ${card.text}`);
-  await showCard(label, card.text);
+  const shown = MonopolyHouseRules.scaleCard(card, game.houseRules, game.rules?.goSalary);
+  log(`${label}: ${shown.text}`);
+  await showCard(label, shown.text);
   const result = applyGameAction({ type: 'APPLY_CARD', playerId: p.id, card });
   if (!result) return;
   presentPaymentEvents(result.events);
@@ -2794,6 +2810,8 @@ function stopGameTick() { if (gameTickInterval) { clearInterval(gameTickInterval
 function presentPaymentEvents(events) {
   for (const event of events) {
     const p = game.players[event.playerId];
+    if (event.type === 'FREE_PARKING_COLLECTED') { log(`${p.name} collects the Free Parking jackpot of ${fmt(event.amount)}.`); showGameCallout({ icon: '💰', title: 'FREE PARKING!', subtitle: `${p.name} collects ${fmt(event.amount)}.`, kind: 'gold', duration: 1800 }); }
+    if (event.type === 'GO_LANDING_BONUS') log(`${p.name} collects an extra ${fmt(event.amount)} for landing on GO.`);
     if (event.type === 'CARD_RULE_CHANGED') log(`New rule for everyone: ${MonopolyCards.rules[event.rule].label} is now ${event.value}.`);
     if (event.type === 'CARD_MONEY_COLLECTED') log(`${p.name} collects ${fmt(event.amount)} from the bank.`);
     if (event.type === 'HOUSE_FORCED_SOLD') log(`${p.name} was forced to sell a house on ${spaceLabel(event.position)}.`);
@@ -3125,6 +3143,7 @@ function buildShell() {
                     <img src="${LOGO_SRC}" class="board-logo" alt="MONOPOLY">
                     <div class="edition">Custom Edition</div>
                   </div>
+                  <div id="parkingJackpot" class="parking-jackpot" hidden></div>
                   <div class="deck chance">?</div>
                   <div class="deck chest">${ICONS.chest}</div>
                   <div class="dice-anchor"><div class="dice" id="dice">${cubeHTML('cube0')}${cubeHTML('cube1')}</div></div>
@@ -3653,12 +3672,12 @@ function deedHTML(pos) {
       <div class="note">(plus 4 houses)</div>`;
   } else if (s.type === 'railroad') {
     head = `<div class="deed-head" style="background:#ddd;color:#111"><small>TITLE DEED</small><b>${esc(s.name)}</b></div>`;
-    rows = `<div class="r"><span>Rent</span><b>$25</b></div><div class="r"><span>If 2 railroads are owned</span><b>$50</b></div>
-      <div class="r"><span>If 3 are owned</span><b>$100</b></div><div class="r"><span>If 4 are owned</span><b>$200</b></div>`;
+    rows = `<div class="r"><span>Rent</span><b>${fmt(25 * (game.houseRules?.moneyMultiplier || 1))}</b></div><div class="r"><span>If 2 railroads are owned</span><b>${fmt(50 * (game.houseRules?.moneyMultiplier || 1))}</b></div>
+      <div class="r"><span>If 3 are owned</span><b>${fmt(100 * (game.houseRules?.moneyMultiplier || 1))}</b></div><div class="r"><span>If 4 are owned</span><b>${fmt(200 * (game.houseRules?.moneyMultiplier || 1))}</b></div>`;
   } else {
     head = `<div class="deed-head" style="background:#ddd;color:#111"><small>TITLE DEED</small><b>${esc(s.name)}</b></div>`;
-    rows = `<div class="note">If one utility is owned, rent is 4 times the amount shown on the dice.</div><br>
-      <div class="note">If both utilities are owned, rent is 10 times the amount shown on the dice.</div>`;
+    rows = `<div class="note">If one utility is owned, rent is ${4 * (game.houseRules?.moneyMultiplier || 1)} times the amount shown on the dice.</div><br>
+      <div class="note">If both utilities are owned, rent is ${10 * (game.houseRules?.moneyMultiplier || 1)} times the amount shown on the dice.</div>`;
   }
   rows += `<hr><div class="r"><span>Mortgage value</span><b>${fmt(mortgageValue(pos))}</b></div>`;
   let stat = owner === null ? `For sale at ${fmt(s.price)}` : `Owned by ${esc(game.players[owner].name)}`;
@@ -3668,7 +3687,7 @@ function deedHTML(pos) {
 function specialText(s) {
   const notes = {
     go: `Collect ${fmt(game?.rules?.goSalary ?? GO_SALARY)} every time you pass.`, jail: 'Just visiting, unless you were sent here.',
-    parking: 'Nothing happens. A free rest.', gotojail: 'Go straight to jail.',
+    parking: game.houseRules?.freeParkingJackpot ? `Collect the jackpot: ${fmt(game.freeParkingPot || 0)}.` : 'Nothing happens. A free rest.', gotojail: 'Go straight to jail.',
     chance: 'Draw a Chance card.', chest: 'Draw a Community Chest card.', tax: `Pay ${fmt(s.amount || 0)} to the bank.`,
   };
   return notes[s.type] || '';
@@ -3793,10 +3812,10 @@ function tradeHTML() {
   return `<div class="dlg-head"><h2>Trade with ${esc(you.name)}</h2><button class="btn alt" ${proposerMine ? '' : 'disabled'} onclick="act('tradeBack')">Change player</button></div>
     <div class="cols">
       <div class="col"><h3>${esc(me.name)} gives</h3>
-        <label class="muted">Cash <input type="number" min="0" step="10" value="${t.giveCash}" ${proposerMine ? '' : 'disabled'} oninput="tradeCash('give', this.value)"></label>
+        <label class="muted">Cash <input type="number" min="0" step="${10 * (game.houseRules?.moneyMultiplier || 1)}" value="${t.giveCash}" ${proposerMine ? '' : 'disabled'} oninput="tradeCash('give', this.value)"></label>
         ${propRows(me.id, 'give', t.give, proposerMine)}</div>
       <div class="col"><h3>${esc(you.name)} gives</h3>
-        <label class="muted">Cash <input type="number" min="0" step="10" value="${t.getCash}" ${proposerMine ? '' : 'disabled'} oninput="tradeCash('get', this.value)"></label>
+        <label class="muted">Cash <input type="number" min="0" step="${10 * (game.houseRules?.moneyMultiplier || 1)}" value="${t.getCash}" ${proposerMine ? '' : 'disabled'} oninput="tradeCash('get', this.value)"></label>
         ${propRows(you.id, 'get', t.get, proposerMine)}</div>
     </div>
     ${t.error ? `<div class="error">${esc(t.error)}</div>` : ''}
@@ -3812,7 +3831,7 @@ function auctionHTML() {
   const color = s.type === 'property' ? COLOR_GROUPS[s.group].css : '#ddd';
   const high = a.highId === null ? 'No bids yet' : `${fmt(a.high)} by ${esc(game.players[a.highId].name)}`;
   const quick = [10, 50, 100].map(n => {
-    const amt = a.high + n;
+    const amt = a.high + n * (game.houseRules?.moneyMultiplier || 1);
     return `<button class="btn alt" ${amt > bidder.money || !mine || authoritativeActionInFlight ? 'disabled' : ''} onclick="act('auctionBid', ${amt})">Bid ${fmt(amt)}</button>`;
   }).join('');
   const roster = game.players.filter(q => !q.bankrupt).map(q => {
@@ -3824,7 +3843,7 @@ function auctionHTML() {
     <p><b>Current bid:</b> ${high}</p>
     <p><b>${esc(bidder.name)}</b>, it is your turn. You have ${fmt(bidder.money)}.${mine ? '' : ' (waiting for them)'}</p>
     <div class="row">${quick}</div>
-    <div class="row"><input type="number" id="bidInput" min="${a.high + 1}" step="1" value="${a.high + 10}" ${mine && !authoritativeActionInFlight ? '' : 'disabled'}>
+    <div class="row"><input type="number" id="bidInput" min="${a.high + 1}" step="1" value="${a.high + 10 * (game.houseRules?.moneyMultiplier || 1)}" ${mine && !authoritativeActionInFlight ? '' : 'disabled'}>
       <button class="btn" ${mine && !authoritativeActionInFlight ? '' : 'disabled'} onclick="act('auctionBid', document.getElementById('bidInput').value)">Place bid</button>
       <button class="btn alt" ${mine && !authoritativeActionInFlight ? '' : 'disabled'} onclick="act('auctionFold')">Fold</button></div>
     ${roster}`;
@@ -4068,9 +4087,11 @@ function celebrateProperty(playerId, position) {
 
 // Draws the whole game screen. Called after every change to "game".
 function render() {
+  SPACES = game?.matchSpaces || window.MonopolyBoard.spaces;
   if (!game) { renderSetup(); return; }
   renderCells();
   updateHud();
+  updateHouseRulesDisplay();
   updateDock();
   updateCaption();
   updateManage();
@@ -5017,7 +5038,7 @@ async function presentAuthoritativeTurnEvents(events, rollingPlayerId) {
   let landingLogged = false;
   const landingTypes = new Set([
     'PROPERTY_AVAILABLE', 'NO_RENT_MORTGAGED', 'RENT_DUE', 'LANDING_OWN_PROPERTY',
-    'TAX_DUE', 'LANDING_GO_TO_JAIL', 'LANDING_NO_EFFECT', 'CARD_DRAW_REQUESTED',
+    'TAX_DUE', 'LANDING_GO_TO_JAIL', 'LANDING_NO_EFFECT', 'CARD_DRAW_REQUESTED', 'FREE_PARKING_COLLECTED', 'GO_LANDING_BONUS',
   ]);
 
   for (const event of events) {
@@ -5644,7 +5665,7 @@ async function backendStartGame(gameId) {
   try {
     const result = await backendGameRequest('/api/game/start', {
       method: 'POST',
-      body: JSON.stringify({ gameId }),
+      body: JSON.stringify({ gameId, houseRules: matchHouseRules }),
     });
     backendLobby = {
       gameId: result.gameId,
@@ -5704,6 +5725,51 @@ function incomingGameInvitationsHTML() {
   </div>`;
 }
 
+// Preferences affect only the next fresh match. The saved state owns its rules.
+let matchHouseRules = MonopolyHouseRules.normalize();
+try { matchHouseRules = MonopolyHouseRules.normalize(JSON.parse(localStorage.getItem('monopoly-house-rules') || '{}')); } catch (_) {}
+let houseRulesExpanded = false;
+function setHouseRule(key, value) {
+  if (!['moneyMultiplier', 'freeParkingJackpot', 'doubleGo'].includes(key)) return;
+  if (key === 'moneyMultiplier') value = Math.max(1, Math.min(10000, Math.round(Number(value) || 1)));
+  matchHouseRules = MonopolyHouseRules.normalize({ ...matchHouseRules, [key]: value });
+  try { localStorage.setItem('monopoly-house-rules', JSON.stringify(matchHouseRules)); } catch (_) {}
+  refreshHouseRuleControls();
+}
+function refreshHouseRuleControls() {
+  const factor = matchHouseRules.moneyMultiplier;
+  const input = $('houseMoneyMultiplier'); if (input && Number(input.value) !== factor) input.value = factor;
+  const toggle = $('houseMoneyEnabled'); if (toggle) toggle.checked = factor !== 1;
+  const preview = $('houseMoneyPreview'); if (preview) preview.textContent = `Starting cash ${fmt(1500 * factor)} · GO ${fmt(200 * factor)} · Boardwalk ${fmt(400 * factor)} · A $100 card pays ${fmt(100 * factor)}`;
+  const summary = $('houseRulesSummary'); if (summary) summary.textContent = houseRulesSummary(matchHouseRules);
+  document.querySelectorAll('[data-money-preset]').forEach(button => { const selected = Number(button.dataset.moneyPreset) === factor; button.classList.toggle('alt', !selected); button.setAttribute('aria-pressed', String(selected)); });
+}
+function houseRulesSummary(rules) {
+  return `House rules · Money ×${rules?.moneyMultiplier || 1}${rules?.freeParkingJackpot ? ' · Free Parking jackpot' : ''}${rules?.doubleGo ? ' · Double GO' : ''}`;
+}
+function houseRulesHTML() {
+  const rules = matchHouseRules, factor = rules.moneyMultiplier;
+  return `<details class="house-rules match-menu-options" ${houseRulesExpanded ? 'open' : ''} ontoggle="houseRulesExpanded=this.open">
+    <summary id="houseRulesSummary">${esc(houseRulesSummary(rules))}</summary>
+    <p class="muted">Choose before starting. These rules apply to this match, including every player online. Saved games keep their original rules.</p>
+    <label class="house-toggle"><input type="checkbox" ${rules.freeParkingJackpot ? 'checked' : ''} onchange="setHouseRule('freeParkingJackpot',this.checked)"><span><strong>Free Parking Jackpot</strong><small>Paid taxes, card fees, jail fines and mortgage interest go into the center. Land on Free Parking to collect it. Purchases and rent do not feed the pot.</small></span></label>
+    <label class="house-toggle"><input type="checkbox" ${rules.doubleGo ? 'checked' : ''} onchange="setHouseRule('doubleGo',this.checked)"><span><strong>Double GO payout</strong><small>Landing exactly on GO adds one extra GO salary.</small></span></label>
+    <label class="house-toggle"><input id="houseMoneyEnabled" type="checkbox" ${factor !== 1 ? 'checked' : ''} onchange="setHouseRule('moneyMultiplier',this.checked ? 10 : 1)"><span><strong>Money multiplier</strong><small>Scale money together. Card percentages and movement stay the same.</small></span></label>
+    <label for="houseMoneyMultiplier">Money multiplier</label>
+    <div class="house-money-stepper"><button class="btn alt" type="button" aria-label="Decrease money multiplier" onclick="setHouseRule('moneyMultiplier',matchHouseRules.moneyMultiplier-1)">−</button><input id="houseMoneyMultiplier" type="number" min="1" max="10000" step="1" value="${factor}" onchange="setHouseRule('moneyMultiplier',this.value)"><button class="btn alt" type="button" aria-label="Increase money multiplier" onclick="setHouseRule('moneyMultiplier',matchHouseRules.moneyMultiplier+1)">+</button></div>
+    <div class="house-presets">${[[1,'Classic ×1'],[10,'×10'],[100,'×100'],[1000,'Canadian-style ×1,000']].map(([value,label]) => `<button class="btn ${factor === value ? '' : 'alt'}" type="button" data-money-preset="${value}" aria-pressed="${factor === value}" onclick="setHouseRule('moneyMultiplier',${value})">${label}</button>`).join('')}</div>
+    <p class="muted">Canadian-style uses larger dollar amounts as a game approximation, rather than current market prices.</p>
+    <p id="houseMoneyPreview" class="house-money-preview">Starting cash ${fmt(1500 * factor)} · GO ${fmt(200 * factor)} · Boardwalk ${fmt(400 * factor)} · A $100 card pays ${fmt(100 * factor)}</p>
+  </details>`;
+}
+function updateHouseRulesDisplay() {
+  const pot = $('parkingJackpot'); if (!pot) return;
+  const hidden = !game.houseRules?.freeParkingJackpot;
+  if (pot.hidden !== hidden) pot.hidden = hidden;
+  const label = `FREE PARKING JACKPOT ${fmt(game.freeParkingPot || 0)}`;
+  if (pot.textContent !== label) pot.textContent = label;
+}
+
 let serverCreateTab = 'new';
 function setServerCreateTab(tab) {
   serverCreateTab = tab === 'continue' ? 'continue' : 'new';
@@ -5725,7 +5791,7 @@ function renderServerCreateSetup() {
     <div class="setup-logo-wrap"><img src="${LOGO_SRC}" class="setup-logo" alt="MONOPOLY"></div><p class="sub">Multiplayer</p>
     <div class="seg match-menu-tabs" role="tablist" aria-label="Match menu"><button class="btn ${serverCreateTab === 'new' ? '' : 'alt'}" role="tab" aria-selected="${serverCreateTab === 'new'}" onclick="setServerCreateTab('new')">New match</button><button class="btn ${serverCreateTab === 'continue' ? '' : 'alt'}" role="tab" aria-selected="${serverCreateTab === 'continue'}" onclick="setServerCreateTab('continue')">Continue</button></div>
     ${!accountUser ? `<button class="btn" onclick="toggleCornerMenu('profile')">Sign in</button>` : ''}
-    ${serverCreateTab === 'new' ? `<div class="panel acc-blue"><h2>Start a new match</h2><p class="muted">Invite your friends, then start together. A save file is created the first time you choose Save &amp; Quit.</p><button class="btn" ${!accountUser || backendLobbyController.inFlight ? 'disabled' : ''} onclick="backendStartNewMatch()">${backendLobbyController.inFlight ? 'Starting…' : 'Start a new match'}</button><details class="match-menu-options"><summary>Board: ${esc(selectedHostBoard?.name || 'Classic board')}</summary><button class="btn alt" onclick="openBoardsScreen(true)">Choose board</button></details>${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}</div>`
+    ${serverCreateTab === 'new' ? `<div class="panel acc-blue"><h2>Start a new match</h2><p class="muted">Invite your friends, then start together. A save file is created the first time you choose Save &amp; Quit.</p><button class="btn" ${!accountUser || backendLobbyController.inFlight ? 'disabled' : ''} onclick="backendStartNewMatch()">${backendLobbyController.inFlight ? 'Starting…' : 'Start a new match'}</button>${houseRulesHTML()}<details class="match-menu-options"><summary>Board: ${esc(selectedHostBoard?.name || 'Classic board')}</summary><button class="btn alt" onclick="openBoardsScreen(true)">Choose board</button></details>${backendLobbyController.error ? `<p class="error" role="alert">${esc(backendLobbyController.error)}</p>` : ''}</div>`
       : `<div class="panel acc-green"><h2>Continue playing</h2><p class="save-slot-count">${backendSaves.length} / 2 save slots used</p><p class="muted">Only the host loads saves, then invites the remaining players. A third save replaces the oldest.</p>${openRows}${backendSaves.map(backendSaveRowHTML).join('')}${!openGames.length && !backendSaves.length ? '<p class="muted">No open matches or saves yet.</p>' : ''}</div>`}
     ${backendSocialError ? `<p role="status">${esc(backendSocialError)}</p>` : ''}
     <button class="btn alt" onclick="setup.screen=''; renderSetup()">Back</button></div>`;
@@ -5747,6 +5813,7 @@ function renderServerLobbySetup() {
         <button class="btn alt" onclick="backendLeaveGame('${esc(lobby.gameId)}')">Leave</button>
         ${isHost ? `<button class="btn alt" onclick="backendRenameGame('${esc(lobby.gameId)}')">Rename</button><button class="btn alt" onclick="backendDeleteGame('${esc(lobby.gameId)}')">Delete</button>` : ''}
       </div></details>
+      ${isHost && status === 'WAITING' && !isSnapshotResume ? houseRulesHTML() : ''}
       ${backendLobbyPlayersHTML(lobby.players, status === 'PAUSED' || isSnapshotResume ? 'Original players' : 'Players', {
         isPaused: status === 'PAUSED', isResume: isSnapshotResume,
       })}
@@ -6137,6 +6204,7 @@ function howToPlayHTML() {
 }
 
 function renderSetup() {
+  if (!game) SPACES = window.MonopolyBoard.spaces;
   // Lobby requests and menu callbacks may finish after the match has loaded.
   // They must never replace a multiplayer board with the setup screen.
   if (typeof reconnectMatch !== 'undefined' && reconnectMatch) { renderReconnectScreen(); return; }
@@ -6181,6 +6249,7 @@ function renderSetup() {
         <div class="muted">Pass the device around. How many players?</div>
         <div class="seg">${[2, 3, 4, 5, 6, 7, 8].map(n => `<button class="btn ${setup.count === n ? '' : 'alt'}" onclick="setCount(${n})">${n}</button>`).join('')}</div>
         ${inputs}
+        ${houseRulesHTML()}
         <button class="btn" style="width:100%;margin-top:12px" onclick="startGame()">Start game</button>
       </details>
       <div class="panel acc-red">

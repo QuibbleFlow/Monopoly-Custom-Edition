@@ -292,7 +292,7 @@ async function deleteGame({ account, gameId, db = database() }) {
   });
 }
 
-async function startGame({ account, gameId, db = database() }) {
+async function startGame({ account, gameId, houseRules, db = database() }) {
   if (!account || !account.id) {
     return err('UNAUTHENTICATED', 'Sign in to continue.', 401);
   }
@@ -352,7 +352,9 @@ async function startGame({ account, gameId, db = database() }) {
       boardNames = board.property_names;
       cardDecks = board.card_decks;
     }
-    let state = engine.createState({ names, accountIds, avatarUrls: players.map(player => player.avatar_url), boardSize: boardData.spaces.length, boardNames, cardDecks });
+    let normalizedRules;
+    try { normalizedRules = require('../../house-rules.js').normalize(houseRules); } catch (error) { return err('INVALID_HOUSE_RULES', error.message); }
+    let state = engine.createState({ houseRules: normalizedRules, names, accountIds, avatarUrls: players.map(player => player.avatar_url), boardSize: boardData.spaces.length, boardNames, cardDecks });
     initializeConnections(state);
     if (game.selected_board_id) {
       const boards = await tx`SELECT name FROM custom_boards WHERE id = ${game.selected_board_id}`;
@@ -373,7 +375,7 @@ async function startGame({ account, gameId, db = database() }) {
     state = orderResult.state;
     state.log.push(`Game started. ${state.players[order[0]].name} goes first.`);
     const serialized = engine.serializeState(state);
-    const board = { spaces: boardData.spaces };
+    const board = { spaces: state.matchSpaces || boardData.spaces };
 
     await tx`INSERT INTO game_states (id, owner_id, state, board, version)
       VALUES (${normalizedGameId}, ${account.id}, ${serialized}::jsonb, ${JSON.stringify(board)}::jsonb, ${1})

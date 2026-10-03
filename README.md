@@ -85,3 +85,12 @@ Controller interaction switches automatically, with no mode selector. The main b
 9. Save & Quit, load as the host, invite the remaining players, and resume. Confirm guests cannot load independently and a third save keeps only the newest two.
 10. Check controller focus, cursor selection, scrolling, and mode switching in profile, friends, board editor, lobby, and game dialogs.
 11. If an API request fails, inspect the corresponding Vercel Function logs. The UI reports backend failures and does not claim unsaved account data synchronized.
+
+### Match house rules
+
+Pass-and-play and fresh multiplayer lobbies offer a collapsible House rules section. The online host submits the selected rules when starting. Everyone receives the same authoritative rules. Restored saves retain their original rules, scaled board and Free Parking pot. No database migration is required.
+
+- Free Parking Jackpot collects paid taxes, card fees, repair bills, jail fines and mortgage interest. Rent, purchases, auction purchases and construction costs do not fund it. Deferred debts enter the pot only when paid, and bankruptcy contributes only actual remaining cash. Landing collects and resets the pot.
+- Double GO adds one extra GO salary when landing exactly on GO.
+- Money scaling supports whole-number multipliers from 1 to 10,000, plus Classic, ×10, ×100 and Canadian-style ×1,000 presets. The Canadian-style preset is a game approximation, not a current housing-market estimate. Cash, prices, rents, construction, taxes, GO salary, fines, card cash effects, repair costs, mortgage values and interest scale together. Auction quick bids and trade cash input steps follow the scale. Percentage cards, movement distances and percentage-based rule multipliers do not scale again.
+- Saved custom board decks remain unchanged. The engine scales fixed amounts when applying cards. Card messages replace matching complete numeric amounts, prefer explicitly marked money when present, preserve separators and leave other text intact. Bare matching amounts support custom messages without currency symbols. GO cards update their stated GO salary without changing destinations. The server emits the same match-specific message used for the applied effect.
