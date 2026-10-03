@@ -74,6 +74,10 @@ Controller interaction switches automatically, with no mode selector. The main b
 
 ## Test after deployment
 
+The responsive shell reserves space for its toolbar, board, action shelf and controller help. Phone/tablet layouts use a horizontal player strip. Wide and short landscape windows use scrollable sidebars. Dialogs, property management and keyboards scroll within the available height. Extreme split windows scroll the game instead of collapsing the board. Measured board dimensions and a container-unit fallback support console browsers, and connected controller badges retain the same bindings at every size.
+
+Check portrait and landscape phones, eight-player lobbies, custom-board/card forms, 1280×720 and 1920×1080, including a connected controller. Verify purchases, auctions, property management, saved-match lists, populated friends menus and the keyboard remain reachable after resizing.
+
 1. Open the Vercel deployment and create an account. A missing database or storage configuration is shown as an error, not replaced with a local account.
 2. Refresh; the account should restore from the session cookie. Sign out and verify the signed-out state.
 3. Sign back in from a second browser or device. Change the username and volume/preferences; reload the other device and verify that it receives the changes.

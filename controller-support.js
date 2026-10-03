@@ -385,7 +385,7 @@
                 ? `<span>Left stick: cursor</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.B}</kbd> Back</span><span>Right stick: scroll</span>`
                 : `<span>Stick / D-pad: choose</span><span><kbd>${labels.A}</kbd> Select</span><span><kbd>${labels.B}</kbd> Back</span>`;
       const gameHints = interaction.kind === 'gameplay'
-        ? `<span><kbd>${labels.B}</kbd> Back</span><span><kbd>${labels.RB}</kbd> Friends</span><span><kbd>${labels.VIEW}</kbd> Profile</span><span><kbd>${labels.MENU}</kbd> Game menu</span>` : '';
+        ? `<span class="controller-secondary"><kbd>${labels.B}</kbd> Back</span><span class="controller-secondary"><kbd>${labels.RB}</kbd> Friends</span><span class="controller-secondary"><kbd>${labels.VIEW}</kbd> Profile</span><span class="controller-secondary"><kbd>${labels.MENU}</kbd> Game menu</span>` : '';
       hud.innerHTML = `<span class="pad-name">🎮 ${escapeHtml(shortControllerName(connectedId))}</span>
         ${hints}
         ${gameHints}`;
@@ -402,6 +402,8 @@
         prompt.style.setProperty('--controller-hud-height', hudHeight + 'px');
         doc.body.appendChild(prompt);
       }
+      const slot = doc.getElementById('controllerTurnSlot');
+      if (slot && prompt.parentElement !== slot) slot.appendChild(prompt);
       const player = doc.getElementById('dock')?.dataset.controllerPlayer || '';
       const text = `<small>${player ? escapeHtml(player) + ', your turn' : 'Your turn'}</small><strong><kbd>${labels.A}</kbd> TO ROLL</strong>`;
       if (canRoll && prompt.innerHTML !== text) prompt.innerHTML = text;
@@ -988,7 +990,8 @@
       let target = pointerTarget();
       while (target && target !== doc.body) {
         const style = root.getComputedStyle(target);
-        if (/(auto|scroll)/.test(style.overflowY) && target.scrollHeight > target.clientHeight) break;
+        if ((y && /(auto|scroll)/.test(style.overflowY) && target.scrollHeight > target.clientHeight) ||
+            (x && /(auto|scroll)/.test(style.overflowX) && target.scrollWidth > target.clientWidth)) break;
         target = target.parentElement;
       }
       const scrollable = target && target !== doc.body ? target : doc.scrollingElement;
@@ -1328,7 +1331,11 @@
     });
     root.addEventListener('gamepadconnected', onGamepadConnected);
     root.addEventListener('gamepaddisconnected', onGamepadDisconnected);
-    root.addEventListener('resize', () => { bindingsDirty = true; positionTurnPrompt(); });
+    root.addEventListener('resize', () => {
+      bindingsDirty = true;
+      positionTurnPrompt();
+      if (connectedIndex != null) drawCursor();
+    });
     doc.addEventListener('pointerdown', onPointerInput, { passive: true });
     doc.addEventListener('click', event => {
       const roll = event.target.closest?.('#dock [data-controller-action="roll"]');

@@ -1359,6 +1359,7 @@ button.board-preview-space:focus-visible { outline: 3px solid #176db7; outline-o
 .parking-jackpot[hidden] { display: none; }
 </style>
 <link rel="stylesheet" href="multiplayer-ui.css">
+<link rel="stylesheet" href="responsive.css">
 </head>
 
 <body>
@@ -3157,7 +3158,10 @@ function buildShell() {
         <div class="caption" id="caption" aria-live="polite"></div>
       </div>
       <div class="side-right">
-        <div class="dock-row"><div class="dock" id="dock"></div><div class="turn-label" id="turnLabel"></div></div>
+        <div class="action-stack">
+          <div id="controllerTurnSlot"></div>
+          <div class="dock-row"><div class="dock" id="dock"></div><div class="turn-label" id="turnLabel"></div></div>
+        </div>
       </div>
     </div>
     <div id="modal"></div>
@@ -3297,10 +3301,11 @@ function updateHud() {
     const connectionLabel = p.removed ? 'Left match' : presence?.status === 'reconnecting' ? 'Reconnecting…' : '';
     const flashCls = diff > 0 ? 'flash-up' : diff < 0 ? 'flash-down' : '';
     const popCls = diff > 0 ? 'pop-up' : diff < 0 ? 'pop-down' : '';
-    return `<div class="pill ${p.id === cur().id && !game.over ? 'current' : ''} ${p.bankrupt ? 'out' : ''} ${flashCls}" id="pill${p.id}" style="--pc:${p.color}">
+    const money = fmt(p.money);
+    return `<div class="pill ${p.id === cur().id && !game.over ? 'current' : ''} ${p.bankrupt ? 'out' : ''} ${flashCls}" id="pill${p.id}" style="--pc:${p.color}" title="${esc(p.name)}: ${money}">
       <span class="order" title="${ordinal(turnPos + 1)} in turn order" aria-label="${ordinal(turnPos + 1)} in turn order">${turnPos + 1}</span>
       <span class="avatar">${playerAvatarContent(p, initial)}</span>
-      <span class="ptext"><span class="pname">${esc(p.name)}${p.inJail ? ' (in jail)' : ''}${offline ? ' (offline)' : ''}${connectionLabel ? `<small class="player-connection">${connectionLabel}</small>` : ''}</span><span class="pmoney ${popCls}">${fmt(p.money)}</span></span>
+      <span class="ptext"><span class="pname">${esc(p.name)}${p.inJail ? ' (in jail)' : ''}${offline ? ' (offline)' : ''}${connectionLabel ? `<small class="player-connection">${connectionLabel}</small>` : ''}</span><span class="pmoney ${money.length > 9 ? 'long-money' : ''} ${popCls}">${money}</span></span>
       <span class="badge" title="Properties owned" aria-label="${owned} properties owned">${owned}</span>
     </div>`;
   }).join('');
@@ -3349,7 +3354,7 @@ function updateDock() {
     </div>
     <div class="dock-group action">${primary}</div>`;
   $('dock').dataset.controllerPlayer = p.name;
-  $('turnLabel').innerHTML = game.over ? 'Game over' : `Turn ${game.turn || 1}<br>${esc(p.name)}'s turn`;
+  $('turnLabel').innerHTML = game.over ? 'Game over' : `<span>Turn ${game.turn || 1}</span> <span>${esc(p.name)}'s turn</span>`;
 }
 // A postponed trade closes its own popup (see updateModal) so it doesn't
 // keep nagging the two people involved -- this button, sitting with the
@@ -3974,7 +3979,7 @@ function bigMoneyToast(p, delta) {
   const amountSize = (2.2 + mag * 1.4).toFixed(2) + 'rem';
   const el = document.createElement('div');
   el.className = 'big-money ' + (up ? 'up' : 'down');
-  el.innerHTML = `<div class="bm-text"><span class="bm-name">${esc(p.name)}</span><span class="bm-amount" style="font-size:${amountSize}">${up ? '+' : '-'}${fmt(Math.abs(delta))}</span></div>`;
+  el.innerHTML = `<div class="bm-text"><span class="bm-name">${esc(p.name)}</span><span class="bm-amount" style="--amount-size:${amountSize}">${up ? '+' : '-'}${fmt(Math.abs(delta))}</span></div>`;
   layer.appendChild(el);
   setTimeout(() => el.remove(), T(2100) + 200);
 }
@@ -6269,5 +6274,6 @@ restoreAccountSession();
 </script>
 <script src="multiplayer-ui.js"></script>
 <script src="controller-support.js"></script>
+<script src="responsive-layout.js"></script>
 </body>
 </html>

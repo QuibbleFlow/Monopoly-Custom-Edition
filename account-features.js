@@ -30,7 +30,7 @@ function ensureCornerMenus() {
     root.id = 'cornerAccountMenus';
     root.innerHTML = `<div class="account-corner-buttons">
       <button id="cornerFriendsButton" class="btn alt" type="button" aria-haspopup="dialog" aria-controls="cornerAccountDialog" aria-expanded="false" onclick="toggleCornerMenu('friends')">Friends</button>
-      <button id="cornerProfileButton" class="btn alt profile-corner-button" type="button" aria-haspopup="dialog" aria-controls="cornerAccountDialog" aria-expanded="false" onclick="toggleCornerMenu('profile')">Profile</button>
+      <button id="cornerProfileButton" class="btn alt profile-corner-button" type="button" aria-label="Profile" aria-haspopup="dialog" aria-controls="cornerAccountDialog" aria-expanded="false" onclick="toggleCornerMenu('profile')">Profile</button>
     </div><div id="cornerAccountBackdrop" class="account-menu-backdrop" hidden onclick="closeCornerMenu()"></div>
     <section id="cornerAccountDialog" class="account-corner-dialog setup" role="dialog" aria-modal="true" aria-labelledby="cornerAccountTitle" hidden>
       <header class="account-menu-heading"><h2 id="cornerAccountTitle"></h2><button class="btn alt" type="button" onclick="closeCornerMenu()" aria-label="Close menu">×</button></header>
@@ -595,6 +595,7 @@ let boardEditorResizeObserver;
 function fitBoardEditorLabels() {
   const preview = document.querySelector('.board-editor-preview');
   if (!preview) return;
+  if (!window.CSS?.supports('aspect-ratio', '1')) preview.style.height = preview.offsetWidth + 'px';
   preview.querySelectorAll('.board-preview-space').forEach(square => {
     const label = square.querySelector('.board-preview-label');
     if (!label) return;
